@@ -1,0 +1,2041 @@
+# PROJECT: DAMSAFE 3D
+
+## Real-Time Dam Risk Prediction, Dam-Break Simulation & Flood Digital Twin
+
+You are a senior full-stack engineer, GIS engineer, hydrologist, hydraulic-modeling engineer, 3D visualization engineer, and UI/UX designer.
+
+I already have an interactive application called **DAM BREAK LAB** that currently contains a 2D shallow-water simulation rendered in a 3D environment. It already supports reservoir water, a dam, breach formation, downstream flood propagation, gauges, discharge, velocity, Froude number, hydrographs, simulation controls, and camera controls.
+
+Do NOT throw away the existing hydraulic simulation.
+
+Instead, transform the existing application into a professional prototype called:
+
+# DAMSAFE 3D
+
+### Subtitle:
+
+**Real-Time Dam Risk Prediction & Flood Digital Twin**
+
+The system must combine:
+
+1. Dam/reservoir monitoring
+2. Water-level analysis
+3. Rainfall and inflow analysis
+4. Dam-failure risk assessment
+5. What-if dam-breach scenarios
+6. 2D shallow-water/hydrodynamic simulation
+7. Flood-depth analysis
+8. Flood-velocity analysis
+9. Flood-arrival-time analysis
+10. Dynamic GIS data
+11. Buildings/roads/villages/infrastructure impact analysis
+12. 3D digital-twin visualization
+13. Evacuation and safe-zone analysis
+14. IoT prototype integration using ESP32
+15. Historical and simulated data
+16. AI/ML-based forecasting architecture
+
+The application must be designed primarily as a **decision-support and simulation system**, NOT as a system that falsely claims to predict with certainty that a real dam will fail.
+
+---
+
+# 1. CORE CONCEPT
+
+The system should answer this question:
+
+> "Given the current or simulated reservoir conditions, what is the level of risk, and if a defined dam-failure scenario occurs, where will the resulting flood travel, how deep and fast will it be, when will it arrive, and what people/infrastructure could be affected?"
+
+The overall pipeline is:
+
+REAL DATA
+↓
+RESERVOIR MONITORING
+↓
+WATER-LEVEL / INFLOW / RAINFALL ANALYSIS
+↓
+FORECASTING
+↓
+RISK ASSESSMENT
+↓
+FAILURE SCENARIO
+↓
+HYDRAULIC FLOOD SIMULATION
+↓
+FLOOD EXTENT / DEPTH / VELOCITY / ARRIVAL TIME
+↓
+IMPACT ANALYSIS
+↓
+3D DIGITAL TWIN
+↓
+EVACUATION / DECISION SUPPORT
+
+---
+
+# 2. TWO REAL-WORLD DAM PROFILES
+
+The prototype must support two selectable dams:
+
+### Dam 1
+
+Idukki
+
+### Dam 2
+
+Mullaperiyar
+
+Do NOT hard-code the entire application to one dam.
+
+Create a reusable dam configuration architecture.
+
+Example conceptual structure:
+
+```text
+Dam
+ ├── id
+ ├── name
+ ├── location
+ ├── coordinates
+ ├── elevation
+ ├── FRL
+ ├── MWL
+ ├── storageCapacity
+ ├── spillwayCapacity
+ ├── damType
+ ├── reservoirGeometry
+ ├── terrainDataset
+ ├── downstreamModel
+ └── hydraulicParameters
+```
+
+The application should allow additional dams to be added later.
+
+IMPORTANT:
+
+Use authoritative/verified values for real dam parameters where available.
+
+Do not invent real-world operational values.
+
+If exact live data is unavailable, clearly label prototype/simulated data as:
+
+**SIMULATED DATA**
+
+---
+
+# 3. APPLICATION MODES
+
+The system must have two primary modes.
+
+## MODE A — LIVE MONITORING
+
+Purpose:
+
+Show the current/simulated condition of the selected dam.
+
+Display:
+
+* reservoir level
+* storage percentage
+* inflow
+* outflow
+* rainfall
+* rate of reservoir rise
+* forecast water level
+* risk score
+* warning state
+
+Do NOT automatically imply that a high water level means the dam will fail.
+
+---
+
+## MODE B — WHAT-IF SCENARIO
+
+Purpose:
+
+Allow the user to ask:
+
+"What happens if the dam fails under this scenario?"
+
+Scenario controls:
+
+* initial reservoir level
+* breach width
+* breach formation time
+* breach location
+* failure mechanism
+* simulation duration
+* rainfall/inflow scenario
+
+The user should explicitly click:
+
+**RUN FAILURE SCENARIO**
+
+before the hydraulic simulation starts.
+
+---
+
+# 4. MAIN DASHBOARD
+
+Create a professional command-center style dashboard.
+
+Layout:
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ DAMSAFE 3D                              ● SYSTEM ONLINE     │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│ DAM SELECTOR                                               │
+│ [ IDUKKI ▼ ]                                               │
+│                                                            │
+│ ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌───────────┐│
+│ │ LEVEL      │ │ STORAGE    │ │ INFLOW     │ │ RISK      ││
+│ │ 724.2 m    │ │ 81%        │ │ 1240 m³/s  │ │ HIGH      ││
+│ └────────────┘ └────────────┘ └────────────┘ └───────────┘│
+│                                                            │
+│                   3D DIGITAL TWIN                          │
+│                                                            │
+│                  Reservoir / Dam / Valley                  │
+│                                                            │
+├────────────────────────────────────────────────────────────┤
+│ LIVE MONITOR │ FORECAST │ SCENARIO │ FLOOD IMPACT │ EVAC. │
+└────────────────────────────────────────────────────────────┘
+```
+
+Use a dark professional engineering/disaster-management visual style.
+
+Avoid making it look like a video game.
+
+---
+
+# 5. LEFT CONTROL PANEL
+
+Replace the existing generic "Break the Dam" interface with a context-aware control panel.
+
+## Dam selector
+
+```text
+DAM
+
+[ Idukki ▼ ]
+```
+
+Options:
+
+* Idukki
+* Mullaperiyar
+
+---
+
+## Mode selector
+
+```text
+MODE
+
+● LIVE MONITORING
+○ WHAT-IF SCENARIO
+```
+
+---
+
+# 6. RESERVOIR MONITORING PANEL
+
+Display:
+
+```text
+RESERVOIR CONDITIONS
+
+Water Level
+724.2 m
+
+Full Reservoir Level
+[verified value]
+
+Storage
+██████████████░░ 81%
+
+Inflow
+1,240 m³/s
+
+Outflow
+720 m³/s
+
+Rate of Rise
++0.32 m/hr
+```
+
+Include a graphical water-level trend.
+
+---
+
+# 7. WATER-LEVEL INTERACTION
+
+The user must be able to increase/decrease the reservoir level using a slider.
+
+Example:
+
+```text
+RESERVOIR LEVEL
+
+Minimum ─────────●──────── Maximum
+
+724.2 m
+```
+
+When the slider changes:
+
+1. 3D reservoir water surface rises/falls.
+2. Storage percentage updates.
+3. Reservoir metrics update.
+4. Risk score updates.
+5. Forecast updates if appropriate.
+6. The digital twin remains synchronized.
+
+The water-level slider should NOT instantly cause a dam failure.
+
+Crossing a threshold should instead increase the warning/risk state.
+
+---
+
+# 8. RISK ENGINE
+
+Create a transparent risk-assessment system.
+
+Do NOT display fake probability such as:
+
+"73% chance the real dam will break"
+
+unless the model has been properly trained and validated.
+
+Instead display:
+
+```text
+RISK SCORE
+67 / 100
+
+STATUS
+HIGH
+```
+
+Risk factors:
+
+* reservoir level
+* percentage of storage
+* rate of rise
+* inflow
+* rainfall
+* forecast rainfall
+* outflow
+* spillway condition
+* optional structural-health indicators
+
+Example:
+
+```text
+RISK FACTORS
+
+Reservoir level       HIGH
+Rate of rise          HIGH
+Rainfall              HIGH
+Inflow                HIGH
+Spillway              NORMAL
+Structural indicators NORMAL
+```
+
+Use a transparent weighted scoring model initially.
+
+Architecture should allow replacement with ML later.
+
+---
+
+# 9. RISK EXPLANATION
+
+Always explain WHY the risk score changed.
+
+Example:
+
+```text
+WHY IS RISK HIGH?
+
+⚠ Reservoir level rising rapidly
+⚠ High forecast rainfall
+⚠ Inflow exceeds recent average
+✓ Spillway operating within assumed limits
+✓ No structural warning indicators
+```
+
+This is critical for trust.
+
+---
+
+# 10. FORECASTING MODULE
+
+Add reservoir forecasting.
+
+Inputs:
+
+* historical water level
+* rainfall
+* inflow
+* outflow
+* time
+* season
+* forecast rainfall
+
+Output:
+
+```text
+WATER LEVEL FORECAST
+
+NOW        724.2 m
++1 HOUR    724.7 m
++3 HOURS   726.1 m
++6 HOURS   729.3 m
++12 HOURS  731.2 m
+```
+
+Initially implement using a deterministic or ML prototype model.
+
+Architecture should support:
+
+* Random Forest
+* XGBoost
+* LSTM
+* time-series models
+
+Do not use deep learning unless there is sufficient training data.
+
+---
+
+# 11. FAILURE SCENARIO PANEL
+
+When the user selects WHAT-IF SCENARIO, display:
+
+```text
+FAILURE SCENARIO
+
+Failure Mechanism
+
+○ Overtopping
+○ Piping / Internal Erosion
+○ Structural Breach
+○ Custom Scenario
+
+Initial Reservoir Level
+[ 728.4 m ]
+
+Breach Width
+[ 100 m ]
+
+Breach Formation Time
+[ 30 min ]
+
+Breach Location
+[ Center ▼ ]
+
+Simulation Duration
+[ 6 hours ]
+
+[ RUN FAILURE SCENARIO ]
+```
+
+The terminology must make it clear that this is an assumed scenario.
+
+---
+
+# 12. KEEP THE EXISTING HYDRAULIC SOLVER
+
+The existing 2D shallow-water solver should remain part of the system.
+
+Do not remove:
+
+* shallow-water equations
+* gravity
+* discharge
+* velocity
+* Froude number
+* flood propagation
+* hydrograph
+* numerical solver information
+
+Move advanced physics parameters into:
+
+**TECHNICAL / ENGINEERING MODE**
+
+Normal users should see decision-support information first.
+
+---
+
+# 13. HYDRAULIC SIMULATION
+
+The simulation must calculate or consume:
+
+* water depth
+* velocity
+* discharge
+* flood extent
+* flood arrival time
+* peak discharge
+* maximum depth
+* maximum velocity
+* hydrograph
+
+For production-grade hydraulic validation, architect the system so that an external hydraulic model such as HEC-RAS 2D can be integrated.
+
+The software architecture should support:
+
+```text
+Scenario Generator
+       ↓
+Hydraulic Engine
+       ↓
+Simulation Results
+       ↓
+Result Processor
+       ↓
+3D Visualization
+```
+
+The current GPU shallow-water solver can remain the fast interactive demonstration engine.
+
+---
+
+# 14. REAL-TIME 3D DIGITAL TWIN
+
+The central scene must contain:
+
+* terrain
+* reservoir
+* dam
+* downstream river/valley
+* buildings
+* roads
+* vegetation
+* bridges
+* important infrastructure
+* flood water
+* measurement points
+
+The visual style should be realistic GIS/engineering visualization rather than cartoon/game graphics.
+
+---
+
+# 15. 3D WATER LEVEL
+
+The reservoir water surface must dynamically respond to:
+
+```text
+water level
+```
+
+As the user increases the water level:
+
+```text
+water level ↑
+↓
+reservoir surface ↑
+↓
+storage ↑
+↓
+risk changes
+```
+
+The 3D water should remain synchronized with the numerical model.
+
+---
+
+# 16. BREACH ANIMATION
+
+When the user runs a failure scenario:
+
+1. Show initial stable reservoir.
+2. Show selected breach location.
+3. Start breach formation.
+4. Visually enlarge the breach according to breach width/formation time.
+5. Reservoir water begins escaping.
+6. Flood wave propagates downstream.
+7. Flood extent expands.
+8. Gauge values update.
+9. Hydrograph progresses.
+10. Impact metrics update.
+
+The animation must be synchronized with simulation time.
+
+---
+
+# 17. FLOOD DEPTH MODE
+
+Add a layer toggle:
+
+```text
+MAP LAYERS
+
+☑ Terrain
+☑ Reservoir
+☑ Flood Extent
+☐ Flood Depth
+☐ Flow Velocity
+☐ Arrival Time
+☐ Roads
+☐ Buildings
+☐ Villages
+☐ Hospitals
+☐ Schools
+☐ Bridges
+☐ Evacuation Centers
+```
+
+When FLOOD DEPTH is selected, visualize depth spatially.
+
+Clicking anywhere should show:
+
+```text
+LOCATION INSPECTOR
+
+Ground Elevation
+826.2 m
+
+Water Surface
+831.4 m
+
+Flood Depth
+5.2 m
+
+Velocity
+4.1 m/s
+
+Arrival Time
+43 min
+
+Risk
+EXTREME
+```
+
+---
+
+# 18. FLOOD VELOCITY MODE
+
+Create:
+
+```text
+FLOW VELOCITY
+
+0–1 m/s
+1–2 m/s
+2–4 m/s
+4–6 m/s
+>6 m/s
+```
+
+Clicking a point displays the velocity.
+
+---
+
+# 19. FLOOD ARRIVAL TIME MODE
+
+Create:
+
+```text
+FLOOD ARRIVAL
+
+0–15 min
+15–30 min
+30–60 min
+1–2 hr
+2–4 hr
+>4 hr
+```
+
+When the user clicks a village:
+
+```text
+VILLAGE XYZ
+
+Flood arrival:
+37 min
+
+Maximum depth:
+4.2 m
+
+Maximum velocity:
+3.8 m/s
+```
+
+---
+
+# 20. GAUGE NETWORK
+
+Replace the single gauge with multiple gauges.
+
+Example:
+
+```text
+G1 — Near Dam
+G2 — Village
+G3 — Bridge
+G4 — Downstream City
+```
+
+Each gauge should display:
+
+* distance from dam
+* current discharge
+* peak discharge
+* velocity
+* flood arrival
+* depth
+
+The gauge values must update during the simulation.
+
+---
+
+# 21. HYDROGRAPH
+
+Keep the current flood hydrograph.
+
+Improve it by making it interactive.
+
+Display:
+
+```text
+FLOOD HYDROGRAPH
+
+Discharge vs Time
+```
+
+When the user moves along the hydrograph:
+
+* update simulation time
+* update 3D flood
+* update gauges
+* update depth
+* update velocity
+* update impact
+
+The hydrograph and 3D animation must share the same simulation clock.
+
+---
+
+# 22. TIME MACHINE
+
+Create a simulation timeline:
+
+```text
+0 min ─────────────●──────────── 360 min
+                  42 min
+
+▶ PLAY
+⏸ PAUSE
+↶ STEP BACK
+↷ STEP FORWARD
+```
+
+Allow the user to scrub through simulation time.
+
+At each time:
+
+* flood extent changes
+* depth changes
+* velocity changes
+* affected infrastructure changes
+
+---
+
+# 23. IMPACT ANALYSIS
+
+After simulation, automatically calculate:
+
+```text
+FLOOD IMPACT
+
+Flooded Area
+84.7 km²
+
+Buildings
+12,842
+
+Roads
+176 km
+
+Bridges
+14
+
+Schools
+21
+
+Hospitals
+3
+
+Villages
+17
+
+Population Exposed
+52,400
+```
+
+These should be calculated from spatial intersections wherever possible.
+
+Do not invent real population numbers.
+
+If using demonstration data, clearly label:
+
+**SIMULATED ESTIMATE**
+
+---
+
+# 24. CRITICAL INFRASTRUCTURE
+
+Support:
+
+* hospitals
+* schools
+* bridges
+* electrical substations
+* water-treatment facilities
+* railway infrastructure
+* emergency facilities
+
+Example:
+
+```text
+CRITICAL INFRASTRUCTURE
+
+Hospitals affected       3
+Schools affected        21
+Bridges affected        14
+Power facilities         5
+```
+
+Clicking an infrastructure item should zoom the 3D camera to it.
+
+---
+
+# 25. DYNAMIC CITY/VILLAGE DATA
+
+The system must NOT depend exclusively on static city data.
+
+Create a GIS update architecture:
+
+```text
+Satellite Data
+       +
+OpenStreetMap
+       +
+Government GIS
+       ↓
+Data Ingestion
+       ↓
+Change Detection
+       ↓
+GIS Database
+       ↓
+Latest Urban Layer
+       ↓
+Flood Impact Analysis
+```
+
+Support periodic updates rather than pretending satellite data is available every second.
+
+Track data freshness:
+
+```text
+DATA FRESHNESS
+
+Buildings
+Updated: 12 days ago
+
+Roads
+Updated: 5 days ago
+
+Land Cover
+Updated: 23 days ago
+
+Satellite
+Updated: 2 days ago
+
+DEM
+Reference dataset
+```
+
+---
+
+# 26. URBAN CHANGE DETECTION
+
+Provide a conceptual change-detection module.
+
+Example:
+
+```text
+URBAN CHANGE
+
+Comparison:
+2025 → 2026
+
+New Buildings
++342
+
+New Roads
++12 km
+
+Land-use Change
+4.8 km²
+```
+
+Use satellite imagery and/or GIS datasets when available.
+
+Do not fabricate live satellite results.
+
+For demonstration, allow sample datasets to be used.
+
+---
+
+# 27. OBSERVED FLOOD VS PREDICTED FLOOD
+
+Support two layers:
+
+### Predicted flood
+
+Generated from hydraulic simulation.
+
+### Observed flood
+
+Generated from satellite/remote-sensing data when available.
+
+Allow comparison:
+
+```text
+PREDICTED
+vs
+OBSERVED
+```
+
+Calculate:
+
+* overlap
+* missed area
+* false-positive area
+* agreement percentage
+
+This becomes a model-validation feature.
+
+---
+
+# 28. EVACUATION MODE
+
+Add a dedicated mode:
+
+```text
+EVACUATION MODE
+```
+
+The system should:
+
+1. identify flooded areas
+2. identify safe areas
+3. identify evacuation centers
+4. remove/avoid flooded roads
+5. calculate routes
+6. estimate travel time
+
+Example:
+
+```text
+VILLAGE A
+
+Nearest Safe Zone:
+Shelter B
+
+Distance:
+4.7 km
+
+Estimated Travel:
+11 min
+
+Flood Arrival:
+32 min
+
+Safety Margin:
+21 min
+
+[ START EVACUATION ROUTE ]
+```
+
+Do not route through predicted flooded roads.
+
+---
+
+# 29. SAFE-ZONE ANALYSIS
+
+Safe zones should consider:
+
+* elevation
+* predicted flood extent
+* accessibility
+* road connectivity
+* shelter capacity
+* distance from flood hazard
+
+Display:
+
+```text
+SAFE ZONES
+
+Shelter A
+Capacity: 500
+Flood Risk: LOW
+
+Shelter B
+Capacity: 800
+Flood Risk: LOW
+```
+
+---
+
+# 30. SCENARIO COMPARISON
+
+Allow users to compare multiple scenarios.
+
+Example:
+
+```text
+SCENARIO COMPARISON
+
+                    A          B
+
+Water Level        720m       728m
+Breach Width        50m       100m
+Flood Area          42km²      85km²
+Peak Discharge      820       1240 m³/s
+Max Depth            4.2m       7.8m
+Buildings          5,240      12,842
+Arrival Time         48m         31m
+```
+
+Display both flood extents on the map.
+
+---
+
+# 31. UNCERTAINTY
+
+Do not present hydraulic results as perfectly certain.
+
+Support ranges where appropriate.
+
+Example:
+
+```text
+EXPECTED FLOOD ARRIVAL
+
+32–45 minutes
+
+Confidence:
+MODERATE
+```
+
+For scenario results, clearly indicate assumptions.
+
+---
+
+# 32. HARDWARE PROTOTYPE
+
+Build an IoT miniature dam model.
+
+Components:
+
+* ESP32
+* ultrasonic water-level sensor
+* flow sensor if available
+* rainfall sensor
+* tilt sensor
+* vibration sensor
+* servo motor for demonstration breach
+* LED indicators
+* small water reservoir
+* miniature dam
+* downstream floodplain model
+
+The hardware is a prototype demonstration, not a real dam monitoring device.
+
+---
+
+# 33. HARDWARE DATA FLOW
+
+```text
+Water Level Sensor
+        ↓
+       ESP32
+        ↓
+       Wi-Fi
+        ↓
+       MQTT
+        ↓
+      Backend
+        ↓
+    DAMSAFE 3D
+```
+
+MQTT topics can follow:
+
+```text
+dam/idukki/waterlevel
+dam/idukki/inflow
+dam/idukki/rainfall
+dam/idukki/tilt
+dam/idukki/vibration
+```
+
+---
+
+# 34. PHYSICAL-DIGITAL SYNCHRONIZATION
+
+This is a major demonstration feature.
+
+When water is physically added to the miniature reservoir:
+
+```text
+Physical Water Level
+        ↓
+Sensor
+        ↓
+ESP32
+        ↓
+MQTT
+        ↓
+Backend
+        ↓
+Digital Twin
+```
+
+The digital reservoir level should update.
+
+Example:
+
+```text
+PHYSICAL MODEL
+Water: 24 cm
+
+DIGITAL TWIN
+Equivalent level: 724.2 m
+
+Risk:
+MODERATE
+```
+
+When the prototype reaches the configured demonstration threshold:
+
+```text
+WARNING
+```
+
+and eventually:
+
+```text
+CRITICAL SCENARIO
+```
+
+The system can trigger the simulated breach.
+
+The physical servo opening is only a representation of a breach event.
+
+---
+
+# 35. HARDWARE SAFETY
+
+Keep the physical model low-voltage and safe.
+
+Do not connect real high-power equipment.
+
+Use:
+
+* USB-powered ESP32
+* low-voltage components
+* small water volume
+* isolated electronics
+
+The prototype must clearly be presented as a demonstration system.
+
+---
+
+# 36. BACKEND ARCHITECTURE
+
+Use:
+
+**Python + FastAPI**
+
+Services:
+
+```text
+Dam Service
+Reservoir Service
+Risk Service
+Forecast Service
+Scenario Service
+Simulation Service
+GIS Service
+Impact Service
+Evacuation Service
+IoT Service
+```
+
+API examples:
+
+```text
+GET /api/dams
+GET /api/dams/{id}
+GET /api/dams/{id}/status
+GET /api/dams/{id}/forecast
+POST /api/risk
+POST /api/scenarios
+POST /api/simulations
+GET /api/simulations/{id}
+GET /api/simulations/{id}/flood
+GET /api/simulations/{id}/impact
+GET /api/simulations/{id}/gauges
+GET /api/simulations/{id}/timeline
+GET /api/infrastructure
+GET /api/evacuation
+```
+
+Use WebSockets for live simulation updates.
+
+---
+
+# 37. DATABASE
+
+Use:
+
+**PostgreSQL + PostGIS**
+
+Tables/entities:
+
+```text
+dams
+reservoirs
+water_levels
+rainfall
+inflows
+outflows
+forecasts
+risk_scores
+breach_scenarios
+simulation_runs
+simulation_frames
+flood_depth
+flood_velocity
+flood_extent
+gauges
+roads
+buildings
+villages
+hospitals
+schools
+bridges
+evacuation_centers
+data_sources
+dataset_versions
+```
+
+---
+
+# 38. FRONTEND TECHNOLOGY
+
+Use:
+
+**React + TypeScript**
+
+Recommended:
+
+* CesiumJS for 3D geospatial visualization
+* Tailwind CSS for UI
+* WebSocket for real-time updates
+* chart library for hydrographs
+* GeoJSON/appropriate geospatial formats for GIS layers
+
+The interface must be responsive.
+
+---
+
+# 39. 3D TECHNOLOGY
+
+Use CesiumJS or an equivalent geospatial 3D engine.
+
+Support:
+
+* terrain
+* camera controls
+* buildings
+* roads
+* reservoir
+* flood layers
+* measurement tools
+* markers
+* timeline
+* 3D overlays
+
+Provide camera presets:
+
+```text
+Overview
+Dam Face
+Reservoir
+Valley
+Top View
+Flood Impact
+Evacuation
+```
+
+Keep:
+
+```text
+Drag → Orbit
+Scroll → Zoom
+Right Drag → Pan
+```
+
+---
+
+# 40. MEASUREMENT TOOLS
+
+Provide:
+
+```text
+DISTANCE
+ELEVATION
+WATER DEPTH
+FLOW VELOCITY
+FLOOD ARRIVAL
+```
+
+Click two points for distance.
+
+Click terrain for elevation.
+
+Click flooded location for:
+
+* water depth
+* velocity
+* arrival time
+
+---
+
+# 41. ALERT SYSTEM
+
+Provide alerts such as:
+
+```text
+INFO
+Reservoir conditions normal
+```
+
+```text
+WATCH
+Reservoir level rising rapidly
+```
+
+```text
+WARNING
+High inflow and rainfall forecast
+```
+
+```text
+CRITICAL SCENARIO
+Selected failure scenario produces significant downstream inundation
+```
+
+Do not represent simulated alerts as official government warnings.
+
+Clearly label prototype alerts.
+
+---
+
+# 42. CURRENT SIMULATION COMPONENTS TO PRESERVE
+
+The existing DAM BREAK LAB already has:
+
+* Break Dam
+* Spillway
+* Flash Flood
+* Reset
+* Time scale
+* River inflow
+* Breach erosion rate
+* Gravity
+* Foam/spray
+* Flow speed map
+* Ambient sound
+* Physics model
+* 3D reservoir
+* dam
+* valley
+* houses
+* trees
+* gauge station
+* simulation time
+* reservoir level
+* discharge
+* peak discharge
+* velocity
+* Froude number
+* solver information
+* hydrograph
+* camera presets
+* pause
+* cinema mode
+
+Preserve the underlying functionality where technically valid.
+
+Refactor the UI so that these functions fit into the DAMSAFE architecture.
+
+---
+
+# 43. NEW UI ORGANIZATION
+
+Use these major navigation tabs:
+
+```text
+COMMAND CENTER
+DIGITAL TWIN
+SCENARIOS
+FLOOD IMPACT
+EVACUATION
+DATA & VALIDATION
+```
+
+---
+
+# 44. COMMAND CENTER
+
+Show:
+
+```text
+Selected Dam
+Current Level
+Storage
+Inflow
+Outflow
+Rainfall
+Forecast
+Risk
+Alerts
+```
+
+---
+
+# 45. DIGITAL TWIN
+
+Show:
+
+```text
+3D Terrain
+Reservoir
+Dam
+Flood
+Buildings
+Roads
+Infrastructure
+Gauges
+Measurement tools
+```
+
+---
+
+# 46. SCENARIOS
+
+Show:
+
+```text
+Water Level
+Failure Type
+Breach Width
+Breach Formation Time
+Breach Location
+Rainfall Scenario
+Inflow Scenario
+Simulation Duration
+```
+
+Buttons:
+
+```text
+RUN SCENARIO
+RESET
+COMPARE
+```
+
+---
+
+# 47. FLOOD IMPACT
+
+Show:
+
+```text
+Flood Area
+Depth
+Velocity
+Arrival Time
+Buildings
+Roads
+Villages
+Hospitals
+Schools
+Bridges
+Population Exposure
+```
+
+---
+
+# 48. EVACUATION
+
+Show:
+
+```text
+Flooded Areas
+Safe Zones
+Evacuation Centers
+Blocked Roads
+Recommended Routes
+Travel Time
+Flood Arrival
+Safety Margin
+```
+
+---
+
+# 49. DATA & VALIDATION
+
+Show:
+
+```text
+Data Sources
+Dataset Date
+Data Freshness
+DEM Information
+GIS Version
+Predicted Flood
+Observed Flood
+Model Agreement
+Simulation Assumptions
+```
+
+---
+
+# 50. DESIGN LANGUAGE
+
+Visual style:
+
+* dark navy/charcoal engineering dashboard
+* white typography
+* cyan/blue water
+* amber warnings
+* red critical states
+* green safe states
+* subtle glass panels
+* clean technical typography
+* thin borders
+* professional maps
+* restrained animations
+
+Avoid:
+
+* excessive neon
+* gaming UI
+* unnecessary gradients
+* cartoon icons
+* clutter
+* fake 3D effects
+* excessive animations
+
+The application should look like a combination of:
+
+* disaster-management command center
+* GIS platform
+* hydraulic engineering software
+* modern digital twin
+
+---
+
+# 51. IMPORTANT UX PRINCIPLE
+
+The user should always understand:
+
+### WHAT IS REAL?
+
+```text
+Observed / imported data
+```
+
+### WHAT IS FORECAST?
+
+```text
+Model prediction
+```
+
+### WHAT IS SIMULATED?
+
+```text
+What-if scenario
+```
+
+Use labels:
+
+```text
+● LIVE
+● FORECAST
+● SIMULATED
+```
+
+This distinction must be visible.
+
+---
+
+# 52. DEMO DATA
+
+When live data is unavailable, create a clearly labeled demonstration dataset.
+
+Example:
+
+```text
+DATA MODE
+
+● SIMULATION
+○ LIVE
+```
+
+Simulation data can include:
+
+* water levels
+* rainfall
+* inflow
+* outflow
+* sensor values
+
+But do not present fabricated values as actual measurements.
+
+---
+
+# 53. PERFORMANCE
+
+The 3D interface must remain smooth.
+
+Separate:
+
+### Interactive visualization
+
+Fast GPU shallow-water visualization.
+
+### Scientific hydraulic simulation
+
+Potentially slower backend simulation.
+
+### GIS processing
+
+Asynchronous jobs.
+
+Use:
+
+```text
+Frontend
+↓
+API
+↓
+Job Queue
+↓
+Simulation Worker
+↓
+Results
+↓
+WebSocket
+↓
+Frontend
+```
+
+Do not freeze the UI while a large simulation is running.
+
+---
+
+# 54. SIMULATION JOB STATUS
+
+When running a simulation:
+
+```text
+SIMULATION
+
+Preparing terrain          ✓
+Loading reservoir          ✓
+Building breach            ✓
+Running hydraulic model    ███████░░░ 72%
+Processing flood extent    ...
+Calculating impacts        ...
+Generating 3D layers       ...
+```
+
+Then:
+
+```text
+SIMULATION COMPLETE
+```
+
+---
+
+# 55. RESULT EXPORT
+
+Allow users to export:
+
+* flood map
+* flood-depth map
+* flood extent
+* hydrograph
+* impact report
+* scenario configuration
+* simulation summary
+
+Support appropriate formats such as:
+
+* GeoJSON
+* GeoTIFF
+* CSV
+* PDF report
+
+---
+
+# 56. ENGINEERING INFORMATION
+
+Add an optional technical drawer:
+
+```text
+HYDRAULIC MODEL
+
+Grid:
+384 × 224
+
+Gravity:
+9.81 m/s²
+
+Solver:
+2D shallow-water
+
+Time step:
+...
+
+Numerical stability:
+...
+
+Boundary conditions:
+...
+
+Breach model:
+...
+```
+
+Do not expose unnecessary technical information on the main dashboard.
+
+---
+
+# 57. SOFTWARE SAFETY / SCIENTIFIC HONESTY
+
+The system is a prototype decision-support and educational/research system.
+
+Clearly distinguish:
+
+* actual observations
+* imported government/remote-sensing datasets
+* forecasts
+* assumptions
+* simulated dam-break scenarios
+
+Never claim:
+
+"AI can guarantee that a dam will break."
+
+Instead say:
+
+"Risk assessment based on available indicators."
+
+For dam-break results say:
+
+"Simulated downstream consequences under the selected breach scenario."
+
+---
+
+# 58. FINAL USER FLOW
+
+The complete user journey should be:
+
+```text
+OPEN DAMSAFE
+      ↓
+SELECT DAM
+      ↓
+VIEW CURRENT CONDITIONS
+      ↓
+VIEW RESERVOIR LEVEL
+      ↓
+VIEW RAINFALL / INFLOW
+      ↓
+VIEW FORECAST
+      ↓
+VIEW RISK
+      ↓
+OPEN WHAT-IF SCENARIO
+      ↓
+SET RESERVOIR LEVEL
+      ↓
+SET FAILURE MECHANISM
+      ↓
+SET BREACH WIDTH
+      ↓
+SET BREACH FORMATION TIME
+      ↓
+RUN SIMULATION
+      ↓
+3D DAM FAILURE
+      ↓
+FLOOD WAVE
+      ↓
+FLOOD DEPTH
+      ↓
+FLOW VELOCITY
+      ↓
+FLOOD ARRIVAL TIME
+      ↓
+IMPACT ANALYSIS
+      ↓
+INFRASTRUCTURE IMPACT
+      ↓
+EVACUATION
+      ↓
+COMPARE SCENARIOS
+```
+
+---
+
+# 59. HARDWARE DEMONSTRATION FLOW
+
+During the physical demonstration:
+
+```text
+ADD WATER TO MINI RESERVOIR
+        ↓
+ULTRASONIC SENSOR
+        ↓
+ESP32
+        ↓
+MQTT
+        ↓
+DAMSAFE BACKEND
+        ↓
+DIGITAL RESERVOIR LEVEL RISES
+        ↓
+RISK SCORE CHANGES
+        ↓
+WARNING
+        ↓
+CRITICAL SCENARIO
+        ↓
+TRIGGER SIMULATED BREACH
+        ↓
+3D DIGITAL FLOOD
+```
+
+The physical model and digital twin should visually synchronize.
+
+---
+
+# 60. DEVELOPMENT PRIORITY
+
+Do not attempt everything simultaneously.
+
+Build in this order:
+
+## PHASE 1
+
+Preserve and stabilize the existing dam-break simulation.
+
+## PHASE 2
+
+Add Idukki and Mullaperiyar dam configurations.
+
+## PHASE 3
+
+Add reservoir monitoring dashboard.
+
+## PHASE 4
+
+Add water-level/risk engine.
+
+## PHASE 5
+
+Add scenario configuration.
+
+## PHASE 6
+
+Connect hydraulic simulation.
+
+## PHASE 7
+
+Add flood-depth/velocity/arrival layers.
+
+## PHASE 8
+
+Add GIS infrastructure impact.
+
+## PHASE 9
+
+Add 3D digital twin improvements.
+
+## PHASE 10
+
+Add evacuation analysis.
+
+## PHASE 11
+
+Add forecasting/ML.
+
+## PHASE 12
+
+Add ESP32/MQTT hardware integration.
+
+## PHASE 13
+
+Add satellite/change-detection pipeline.
+
+## PHASE 14
+
+Add validation and reporting.
+
+---
+
+# 61. MVP REQUIREMENTS
+
+The first working version MUST have:
+
+1. Idukki
+2. Mullaperiyar
+3. 3D terrain
+4. Reservoir
+5. Dam
+6. Adjustable water level
+7. Risk score
+8. Failure scenario configuration
+9. Dam breach
+10. Flood propagation
+11. Flood depth
+12. Flood velocity
+13. Flood arrival time
+14. Hydrograph
+15. Multiple gauges
+16. Buildings
+17. Roads
+18. Villages
+19. Impact statistics
+20. ESP32 water-level prototype
+
+Only after this is stable should advanced AI and satellite features be added.
+
+---
+
+# 62. SUCCESS CRITERIA
+
+The final prototype should allow a judge to understand the complete chain within approximately 2–3 minutes:
+
+```text
+REAL/DEMO SENSOR DATA
+        ↓
+DAM CONDITION
+        ↓
+RISK
+        ↓
+WHAT-IF FAILURE
+        ↓
+HYDRAULIC SIMULATION
+        ↓
+3D FLOOD
+        ↓
+DEPTH
+        ↓
+ARRIVAL TIME
+        ↓
+AFFECTED PEOPLE/INFRASTRUCTURE
+        ↓
+EVACUATION
+```
+
+The final result must feel like a **real disaster-management decision-support platform**, not merely a graphical dam-break game.
+
+---
+
+# 63. MOST IMPORTANT PRODUCT STATEMENT
+
+The product should communicate:
+
+> **DAMSAFE 3D transforms dam and environmental data into a continuously updated digital twin, enabling risk assessment, dam-failure scenario simulation, hydrodynamic flood prediction, infrastructure impact analysis, and evacuation planning in a single 3D geospatial platform.**
+
+---
+
+# 64. IMPLEMENTATION RULE
+
+Before modifying major components:
+
+1. Inspect the existing codebase.
+2. Identify the current hydraulic solver.
+3. Identify the 3D renderer.
+4. Identify the current state-management system.
+5. Identify current simulation variables.
+6. Preserve working physics.
+7. Refactor incrementally.
+8. Do not replace working components unnecessarily.
+9. Create reusable components.
+10. Keep simulation logic separate from visualization.
+11. Keep real-world data separate from simulated data.
+12. Keep hydraulic calculations separate from AI risk scoring.
+13. Keep GIS processing separate from frontend rendering.
+
+The final architecture should be modular and extensible.
+
+---
+
+# 65. FINAL ARCHITECTURE
+
+Use this conceptual architecture:
+
+```text
+                     DATA SOURCES
+                          │
+       ┌──────────────────┼─────────────────┐
+       ↓                  ↓                 ↓
+   IoT Sensors        Rainfall          GIS/Satellite
+       │                  │                 │
+       └──────────────────┼─────────────────┘
+                          ↓
+                    DATA INGESTION
+                          ↓
+                    POSTGRES/POSTGIS
+                          │
+       ┌──────────────────┼───────────────────┐
+       ↓                  ↓                   ↓
+ RESERVOIR MODEL     RISK ENGINE        GIS ENGINE
+       │                  │                   │
+       ↓                  ↓                   ↓
+ FORECASTING          RISK SCORE       CHANGE DETECTION
+       │                  │                   │
+       └──────────────────┼───────────────────┘
+                          ↓
+                  SCENARIO GENERATOR
+                          ↓
+                  HYDRAULIC ENGINE
+                          ↓
+                 FLOOD RESULT PROCESSOR
+                          ↓
+          ┌───────────────┼────────────────┐
+          ↓               ↓                ↓
+      FLOOD MAP       IMPACT ANALYSIS   EVACUATION
+          │               │                │
+          └───────────────┼────────────────┘
+                          ↓
+                   3D DIGITAL TWIN
+                          ↓
+                  REACT + CESIUM
+                          ↓
+                  COMMAND CENTER
+```
+
+Build the system progressively and make every module functional before adding decorative features.
