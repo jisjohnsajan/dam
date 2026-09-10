@@ -212,3 +212,59 @@ Stage Summary:
   storm); Reset returns to LIVE cleanly; Flood overtop launches with automatic storm visuals;
   mobile 390px shows scrollable quick bar, no overlaps.
 - tsc clean for src/, eslint clean on changed files, dev.log 200s only.
+
+---
+Task ID: fix-water-placement
+Agent: Super Z (main agent)
+Task: Fix "water is not in the correct place" and "water flowing out from the dam is not in
+the correct place" (user screenshots showed a dry-looking basin behind the dam, a stray blue
+patch in the far upstream corner, and breach outflow appearing away from the dam).
+
+Work Log:
+- ROOT CAUSE #1 (critical, both complaints): WATER_VERT in glsl.ts computed
+  vUvw = vec2(position.x/uDomain.x + 0.5, position.z/uDomain.y + 0.5), but the water mesh
+  geometry is baked with geo.translate(LX/2,0,0), so position.x is already in [0,192] and the
+  extra +0.5 sampled the sim state HALF A DOMAIN (96 m) too far upstream: the reservoir
+  surface rendered as "dry" (dark sediment bed showed through) while the shifted wet region
+  lit up only the far gorge strip (the stray blue patch), and breach/gate outflow rendered
+  ~96 m upstream of the dam. Fix: vUvw.x = position.x / uDomain.x (z term unchanged).
+- ROOT CAUSE #2 (breach outflow throttled + hidden): applyStructState (terrain.ts) cleared
+  the failing blocks only over x<=115.4 (holding section), leaving the downstream batter
+  wedge (up to ~21 m high) intact in the sim while the visual blocks sink completely — an
+  invisible dam inside the visibly-open gap. Fix: breach x-range extended to 120.9 (full
+  block footprint, matches rigid visual sink).
+- Water shader (glsl.ts WATER_FRAG): deep-water ramp crushed 8 m depth to near-black, so
+  even correctly-placed lake read as slate rock. Body colours raised
+  (shallow 0.075/0.33/0.545, deep 0.012/0.115/0.29), absorption depth/11 pow 0.62, added
+  in-scattered sky ambient term, reflection floor (mixF = fres*1.05 + 0.13) and alpha base
+  0.72 — the reservoir now reads as blue water from steep angles too.
+- Downstream base river (terrain.ts buildInitState): was a 0.4 m sheet across the whole
+  valley ending in a hard straight edge at the domain boundary (looked like a floating milk
+  lake). Now confined to the incised channel band (exp(-z^2/100) > 0.45) with depth tapering
+  to zero over x 176-191 so the river sinks naturally before the boundary.
+- Stilling-basin apron (terrain.ts + props.ts): visual slab used to float ~2 m above the
+  channel bed so breach water vanished underneath it. New shared APRON_TOP = bedAt(DAM_X+13.5,0)+0.35;
+  buildStructBase now adds the apron shelf as a structure (flood rides over it, baffle
+  whitewater), and the visual slab + baffle blocks sit exactly on that elevation.
+- Gorge sill (terrain.ts bedAt): rapids ramp (+10 m by x<0.6) hides the upstream water edge
+  inside the mountain notch instead of slicing it at the domain boundary.
+- Browser-verified end to end (agent-browser, 1440x810):
+  * Boot: blue lake fills the basin right behind the dam, level 21.5 m, rise 0.00 m/hr
+    (lake at rest intact), downstream river is a tidy channel ribbon, no console/page errors.
+  * Dam break (structural, center, 3 blocks): blocks sink visibly in sync with the gap,
+    water pours EXACTLY through the visible breach, flood spreads over the apron/baffles and
+    sweeps the village; G1 peaks 469 m3/s, 11.5-13 m/s, depth 3.1 m; alert + hydrograph live.
+  * Top view confirms flood originates ONLY at the breach — rest of the valley stays dry.
+  * Open gates: radial gates lift, spillway release visible, hydrograph bump, level held by drive.
+  * Reset: clean return to LIVE, lake restored, blocks restored, base river back.
+  * tsc clean (src/), eslint clean on changed files, dev.log 200s only.
+
+Stage Summary:
+- Deliverable unchanged in scope: DAMSAFE 3D at / — the fixes make the simulated water appear
+  exactly where the physics says it should: reservoir behind the dam, breach jet through the
+  visible gap, spillway release over the chute, river in the channel.
+- Key files touched: src/lib/dam/glsl.ts (uv fix + water look), src/lib/dam/terrain.ts
+  (breach span, apron struct, init river, gorge sill), src/lib/dam/props.ts (apron/baffles
+  on the bed).
+- Verification screenshots: tool-results/fix_boot.png, fix_breach3-8.png, fix_flood1-3.png,
+  fix_gates1-2.png, fix_reset.png, fix_hero.png.

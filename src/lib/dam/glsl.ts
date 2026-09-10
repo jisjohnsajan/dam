@@ -355,7 +355,11 @@ vec4 sampleBil(sampler2D tex, vec2 uv, vec2 texel) {
 }
 
 void main() {
-  vUvw = vec2(position.x / uDomain.x + 0.5, position.z / uDomain.y + 0.5);
+  // geometry is baked with translate(LX/2, 0, 0): position.x in [0, LX],
+  // position.z in [-LZ/2, LZ/2] -> uv = (x/LX, z/LZ + 0.5). NO extra +0.5 on x
+  // (that half-domain shift used to render the lake and the breach jet ~96 m
+  // upstream of the dam -- the "water in the wrong place" bug).
+  vUvw = vec2(position.x / uDomain.x, position.z / uDomain.y + 0.5);
   float eta = sampleBil(uState, vUvw, uTexel).x;
   vec3 p = position;
   p.y = eta;
@@ -482,12 +486,18 @@ void main() {
   vec3 sky = skyColor(normalize(R)) * vec3(0.82, 0.93, 1.12) * 1.05; // blue-shifted sky reflection
   sky *= 1.0 - 0.35 * uRain; // overcast dims reflected sky
 
-  float fres = 0.03 + 0.85 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+  float fres = 0.04 + 0.85 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
 
-  // ---- water body colour: clear blue tint, absorption by depth
-  vec3 shallow = vec3(0.050, 0.270, 0.490);
-  vec3 deep    = vec3(0.006, 0.060, 0.165);
-  vec3 body = mix(shallow, deep, sqrt(clamp(depth / 10.0, 0.0, 1.0)));
+  // ---- water body colour: clear blue tint, absorption by depth.
+  // Kept luminous (real reservoirs read as saturated blue-green, never black):
+  // at typical viewing angles the old ramp crushed 8 m of depth to near-black
+  // and the lake looked like a dry slate plateau.
+  vec3 shallow = vec3(0.075, 0.330, 0.545);
+  vec3 deep    = vec3(0.012, 0.115, 0.290);
+  float absorb = pow(clamp(depth / 11.0, 0.0, 1.0), 0.62);
+  vec3 body = mix(shallow, deep, absorb);
+  // in-scattered sky ambient keeps depth-coloured water luminous
+  body += vec3(0.045, 0.10, 0.17) * (1.0 - absorb) * (1.0 - 0.5 * uRain);
 
   // foam + shoreline whiteness
   float foam = texture2D(uFoam, vUvw).r;
@@ -498,7 +508,10 @@ void main() {
   vec3 H = normalize(uSunDir + V);
   float spec = (pow(max(dot(N, H), 0.0), 220.0) * 3.2 + pow(max(dot(N, H), 0.0), 24.0) * 0.16) * (1.0 - 0.6 * uRain);
 
-  vec3 col = mix(body, sky, clamp(fres, 0.0, 1.0)) + uSunColor * spec * (1.0 - 0.6 * foam);
+  // sky reflection with a small floor so the lake never loses its blue read,
+  // even looking straight down (fresnel alone only kicks in at grazing angles)
+  float mixF = clamp(fres * 1.05 + 0.13, 0.0, 1.0);
+  vec3 col = mix(body, sky, mixF) + uSunColor * spec * (1.0 - 0.6 * foam);
 
   // ---- analysis layers (downstream of the dam only — the reservoir is storage)
   float wx = vUvw.x * uDomain.x;
@@ -516,7 +529,7 @@ void main() {
   }
 
   // shoreline transparency ramp
-  float alpha = clamp(0.62 + fres * 0.38 + foam * 0.25, 0.0, 0.97);
+  float alpha = clamp(0.72 + fres * 0.28 + foam * 0.25, 0.0, 0.97);
   alpha *= smoothstep(0.02, 0.22, depth);
   if (uLayerMode > 0.5) alpha = clamp(0.55 + 0.4 * smoothstep(0.02, 0.15, depth), 0.0, 0.92);
   alpha = clamp(alpha, 0.0, 0.97);

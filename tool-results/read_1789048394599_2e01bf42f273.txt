@@ -1,0 +1,702 @@
+    35→    35→export type CamPreset = 'overview' | 'dam' | 'valley' | 'top' | 'reservoir' | 'impact';
+    36→    36→export type LayerMode = 0 | 1 | 2 | 3; // natural | depth | velocity | arrival
+    37→    37→
+    38→    38→export interface ScenarioParams {
+    39→    39→  levelFrac: number;
+    40→    40→  mechanism: FailureMechanism;
+    41→    41→  breachWidthM: number;
+    42→    42→  formationMin: number;
+    43→    43→  location: BreachLocation;
+    44→    44→  rain: RainScenario;
+    45→    45→}
+    46→    46→
+    47→    47→export interface GaugeStat {
+    48→    48→  id: string;
+    49→    49→  label: string;
+    50→    50→  q: number; // demo m³/s
+    51→    51→  qPeak: number;
+    52→    52→  depth: number; // m
+    53→    53→  vel: number; // m/s
+    54→    54→  froude: number; // downstream Froude number at gauge
+    55→    55→  arrivalMin: number | null; // real minutes
+    56→    56→  distKm: number;
+    57→    57→}
+    58→    58→
+    59→    59→export interface DamStats {
+    60→    60→  t: number; // demo sim seconds
+    61→    61→  realMin: number; // scenario real minutes
+    62→    62→  level: number; // demo sim m
+    63→    63→  levelFrac: number;
+    64→    64→  riseMPerHr: number; // real metres/hour (scaled)
+    65→    65→  vmax: number;
+    66→    66→  froude: number;
+    67→    67→  fps: number;
+    68→    68→  phase: Phase;
+    69→    69→  scenarioActive: boolean;
+    70→    70→  breach01: number;
+    71→    71→  progress01: number;
+    72→    72→  stage: number; // 0 idle, 1 preparing, 2 reservoir, 3 breach, 4 flood, 5 processing
+    73→    73→  gauges: GaugeStat[];
+    74→    74→  floodedCells: number;
+    75→    75→  qOut: number; // demo m³/s through breach+gates (G1)
+    76→    76→}
+    77→    77→
+    78→    78→const DT_MAX = 0.008;
+    79→    79→const MANNING = 0.028;
+    80→    80→const SPRAY_N = 128;
+    81→    81→const DOWN_W = 48;
+    82→    82→const DOWN_H = 28;
+    83→    83→const SNAP_W = 192;
+    84→    84→const SNAP_H = 112;
+    85→    85→const SNAP_MAX = 42;
+    86→    86→const SNAP_EVERY = 2.5; // demo s
+    87→    87→
+    88→    88→const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
+    89→    89→const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+    90→    90→
+    91→    91→interface Floater {
+    92→    92→  mesh: THREE.Object3D;
+    93→    93→  pos: THREE.Vector3;
+    94→    94→  vel: THREE.Vector3;
+    95→    95→  home: THREE.Vector3;
+    96→    96→}
+    97→    97→
+    98→    98→export class DamSim {
+    99→    99→  // ---- three core
+   100→   100→  private renderer: THREE.WebGLRenderer;
+   101→   101→  private scene = new THREE.Scene();
+   102→   102→  private camera: THREE.PerspectiveCamera;
+   103→   103→  private controls: OrbitControls;
+   104→   104→  private container: HTMLElement;
+   105→   105→  private lastFrameTime = performance.now();
+   106→   106→  private rafId = 0;
+   107→   107→  private ro: ResizeObserver;
+   108→   108→  private composer!: EffectComposer;
+   109→   109→  private bloomPass!: UnrealBloomPass;
+   110→   110→
+   111→   111→  // ---- GPU sim resources
+   112→   112→  private rtStateA!: THREE.WebGLRenderTarget;
+   113→   113→  private rtStateB!: THREE.WebGLRenderTarget;
+   114→   114→  private rtEta!: THREE.WebGLRenderTarget;
+   115→   115→  private rtFoamA!: THREE.WebGLRenderTarget;
+   116→   116→  private rtFoamB!: THREE.WebGLRenderTarget;
+   117→   117→  private rtSprayA!: THREE.WebGLRenderTarget;
+   118→   118→  private rtSprayB!: THREE.WebGLRenderTarget;
+   119→   119→  private rtDown!: THREE.WebGLRenderTarget;
+   120→   120→  private rtSnap!: THREE.WebGLRenderTarget;
+   121→   121→  private texBed!: THREE.DataTexture;
+   122→   122→  private texStruct!: THREE.DataTexture;
+   123→   123→  private texInit!: THREE.DataTexture;
+   124→   124→  private texSprayInit!: THREE.DataTexture;
+   125→   125→  private texBlack!: THREE.DataTexture;
+   126→   126→  private texArr!: THREE.DataTexture;
+   127→   127→
+   128→   128→  private etaPass!: FullScreenQuad;
+   129→   129→  private velPass!: FullScreenQuad;
+   130→   130→  private foamPass!: FullScreenQuad;
+   131→   131→  private sprayPass!: FullScreenQuad;
+   132→   132→  private copyPass!: FullScreenQuad;
+   133→   133→  private downPass!: FullScreenQuad;
+   134→   134→  private snapPass!: FullScreenQuad;
+   135→   135→
+   136→   136→  private structArr!: Float32Array;
+   137→   137→  private structBase!: Float32Array;
+   138→   138→  private bedGrid!: Float32Array;
+   139→   139→
+   140→   140→  // ---- scene objects
+   141→   141→  private waterMat!: THREE.ShaderMaterial;
+   142→   142→  private sprayMat!: THREE.ShaderMaterial;
+   143→   143→  private dam!: DamProps;
+   144→   144→  private houses: House[] = [];
+   145→   145→  private trees: Tree[] = [];
+   146→   146→  private barrels: Barrel[] = [];
+   147→   147→  private chunks: Chunk[] = [];
+   148→   148→  private floaters: Floater[] = [];
+   149→   149→  private evacLine: THREE.Line | null = null;
+   150→   150→  private audio = new RiverAudio();
+   151→   151→  private sunDir = new THREE.Vector3(-0.42, 0.62, 0.28).normalize();
+   152→   152→  // weather / storm system
+   153→   153→  private sunLight!: THREE.DirectionalLight;
+   154→   154→  private hemiLight!: THREE.HemisphereLight;
+   155→   155→  private skyU!: Record<string, THREE.IUniform>;
+   156→   156→  private rainMesh!: THREE.LineSegments;
+   157→   157→  private rainPos!: Float32Array;
+   158→   158→  private rainVis = 0;
+   159→   159→  private rainHeavy = false;
+   160→   160→  private boltTimer = 9;
+   161→   161→  private flash = 0;
+   162→   162→  private fogDay = new THREE.Color(0xc6d8ea);
+   163→   163→  private fogStorm = new THREE.Color(0x76838f);
+   164→   164→
+   165→   165→  // ---- state
+   166→   166→  private curState: THREE.WebGLRenderTarget;
+   167→   167→  private nextState: THREE.WebGLRenderTarget;
+   168→   168→  private curFoam!: THREE.WebGLRenderTarget;
+   169→   169→  private nextFoam!: THREE.WebGLRenderTarget;
+   170→   170→  private curSpray!: THREE.WebGLRenderTarget;
+   171→   171→  private nextSpray!: THREE.WebGLRenderTarget;
+   172→   172→
+   173→   173→  // ---- config
+   174→   174→  private damProfile: DamProfile = DAMS.idukki;
+   175→   175→  private liveFrac = 0.84;
+   176→   176→
+   177→   177→  simTime = 0;
+   178→   178→  private phase: Phase = 'live';
+   179→   179→  // scenario state
+   180→   180→  private scenario: ScenarioParams | null = null;
+   181→   181→  private scenT = 0;
+   182→   182→  private breachT: number | null = null;
+   183→   183→  private breachTau = 15;
+   184→   184→  private breachPre = 0; // piping pre-depth
+   185→   185→  private breachSpan: BreachSpan | null = null;
+   186→   186→  private breachDepth01 = 0;
+   187→   187→  private breachInverts: number[] = [];
+   188→   188→  private breachDelays: number[] = []; // staggered per-block failure (demo s)
+   189→   189→  private gateT: number | null = null;
+   190→   190→  private gateElev: number | null = null;
+   191→   191→  private overtopT = 0;
+   192→   192→  private structDirty = true;
+   193→   193→  private shake = 0;
+   194→   194→  private paused = false;
+   195→   195→  private scrubbing = false;
+   196→   196→
+   197→   197→  // params
+   198→   198→  private timeScale = 1;
+   199→   199→  private prevTimeScale = 1;
+   200→   200→  private gravity = 9.81;
+   201→   201→  private baseInflow = 8;
+   202→   202→  private rainInflow = 0;
+   203→   203→  private breachRate = 1;
+   204→   204→  private foamOn = true;
+   205→   205→  private sprayOn = true;
+   206→   206→  private showSpeed = false;
+   207→   207→  private layerMode: LayerMode = 0;
+   208→   208→  private cinematic = false;
+   209→   209→  private cinAngle = 0;
+   210→   210→
+   211→   211→  // stats / readback
+   212→   212→  private field = new FlowField();
+   213→   213→  private readBuf = new Float32Array(DOWN_W * DOWN_H * 4);
+   214→   214→  private arr = new Float32Array(DOWN_W * DOWN_H); // first-flood demo seconds (0 = dry)
+   215→   215→  private arrDirty = true;
+   216→   216→  private qPeak = 0;
+   217→   217→  private frame = 0;
+   218→   218→  private fpsEma = 60;
+   219→   219→  private stripCells = 1;
+   220→   220→  private srcRate = 0;
+   221→   221→  private sample = { eta: 0, u: 0, v: 0 };
+   222→   222→  private gaugePeaks = [0, 0, 0, 0];
+   223→   223→  private gaugeArr: (number | null)[] = [null, null, null, null];
+   224→   224→  private lastLevel = 0;
+   225→   225→  private lastStatSimT = 0;
+   226→   226→  private levelRise = 0; // demo m/s (ema)
+   227→   227→
+   228→   228→  // timeline snapshots
+   229→   229→  private snaps: { t: number; data: Float32Array }[] = [];
+   230→   230→  private snapClock = 0;
+   231→   231→  private snapReadBuf = new Float32Array(SNAP_W * SNAP_H * 4);
+   232→   232→
+   233→   233→  // camera tween
+   234→   234→  private tweenT = 1;
+   235→   235→  private tweenFrom = new THREE.Vector3();
+   236→   236→  private tweenFromT = new THREE.Vector3();
+   237→   237→  private tweenTo = new THREE.Vector3();
+   238→   238→  private tweenToT = new THREE.Vector3();
+   239→   239→
+   240→   240→  onStats: ((s: DamStats) => void) | null = null;
+   241→   241→  onError: ((msg: string) => void) | null = null;
+   242→   242→
+   243→   243→  constructor(container: HTMLElement) {
+   244→   244→    this.container = container;
+   245→   245→    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+   246→   246→    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+   247→   247→    this.renderer.setSize(container.clientWidth, container.clientHeight);
+   248→   248→    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+   249→   249→    this.renderer.toneMappingExposure = 0.85;
+   250→   250→    this.renderer.shadowMap.enabled = true;
+   251→   251→    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+   252→   252→    container.appendChild(this.renderer.domElement);
+   253→   253→
+   254→   254→    this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.5, 6000);
+   255→   255→    this.camera.position.set(150, 58, 132);
+   256→   256→
+   257→   257→    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+   258→   258→    this.controls.target.set(100, 12, 0);
+   259→   259→    this.controls.enableDamping = true;
+   260→   260→    this.controls.dampingFactor = 0.08;
+   261→   261→    this.controls.maxPolarAngle = 1.54;
+   262→   262→    this.controls.minDistance = 12;
+   263→   263→    this.controls.maxDistance = 500;
+   264→   264→
+   265→   265→    this.scene.fog = new THREE.Fog(0xc6d8ea, 380, 1600);
+   266→   266→
+   267→   267→    // sky + environment
+   268→   268→    const sky = new Sky();
+   269→   269→    sky.scale.setScalar(12000);
+   270→   270→    const su = sky.material.uniforms;
+   271→   271→    this.skyU = su as unknown as Record<string, THREE.IUniform>;
+   272→   272→    su.turbidity.value = 5.5;
+   273→   273→    su.rayleigh.value = 2.4;
+   274→   274→    su.mieCoefficient.value = 0.006;
+   275→   275→    su.mieDirectionalG.value = 0.85;
+   276→   276→    su.sunPosition.value.copy(this.sunDir);
+   277→   277→    const skyScene = new THREE.Scene();
+   278→   278→    skyScene.add(sky);
+   279→   279→    const pmrem = new THREE.PMREMGenerator(this.renderer);
+   280→   280→    this.scene.environment = pmrem.fromScene(skyScene).texture;
+   281→   281→    this.scene.environmentIntensity = 0.32;
+   282→   282→    pmrem.dispose();
+   283→   283→    this.scene.add(sky);
+   284→   284→
+   285→   285→    // lights
+   286→   286→    const sun = new THREE.DirectionalLight(0xffe8c8, 2.1);
+   287→   287→    this.sunLight = sun;
+   288→   288→    sun.position.copy(this.sunDir).multiplyScalar(420);
+   289→   289→    sun.castShadow = true;
+   290→   290→    sun.shadow.mapSize.set(4096, 4096);
+   291→   291→    const sc = sun.shadow.camera;
+   292→   292→    sc.left = -95; sc.right = 95; sc.top = 95; sc.bottom = -95; sc.near = 100; sc.far = 950;
+   293→   293→    sun.shadow.bias = -0.0004;
+   294→   294→    sun.shadow.normalBias = 0.6;
+   295→   295→    sun.target.position.set(105, 10, 0);
+   296→   296→    this.scene.add(sun, sun.target);
+   297→   297→    const hemi = new THREE.HemisphereLight(0xbfd8ef, 0x6b6354, 0.45);
+   298→   298→    this.hemiLight = hemi;
+   299→   299→    this.scene.add(hemi);
+   300→   300→
+   301→   301→    this.buildTerrainMesh();
+   302→   302→    this.buildGpuResources();
+   303→   303→    this.buildWater();
+   304→   304→    this.buildProps();
+   305→   305→    this.buildRain();
+   306→   306→
+   307→   307→    this.curState = this.rtStateA;
+   308→   308→    this.nextState = this.rtStateB;
+   309→   309→    this.curFoam = this.rtFoamA;
+   310→   310→    this.nextFoam = this.rtFoamB;
+   311→   311→    this.curSpray = this.rtSprayA;
+   312→   312→    this.nextSpray = this.rtSprayB;
+   313→   313→    this.resetSim();
+   314→   314→
+   315→   315→    // post-processing: subtle bloom for sun glints & foam highlights
+   316→   316→    this.composer = new EffectComposer(this.renderer);
+   317→   317→    this.composer.addPass(new RenderPass(this.scene, this.camera));
+   318→   318→    this.bloomPass = new UnrealBloomPass(
+   319→   319→      new THREE.Vector2(container.clientWidth, container.clientHeight),
+   320→   320→      0.5, 0.3, 3.5,
+   321→   321→    );
+   322→   322→    this.bloomPass.enabled = false; // opt-in "HD glow" (HDR skies bloom easily)
+   323→   323→    this.composer.addPass(this.bloomPass);
+   324→   324→    this.composer.addPass(new OutputPass());
+   325→   325→
+   326→   326→    this.ro = new ResizeObserver(() => this.onResize());
+   327→   327→    this.ro.observe(container);
+   328→   328→
+   329→   329→    (window as unknown as Record<string, unknown>).__damSim = this;
+   330→   330→    this.lastFrameTime = performance.now();
+   331→   331→    this.tick();
+   332→   332→  }
+   333→   333→
+   334→   334→  // ================================================================ terrain mesh
+   335→   335→  private buildTerrainMesh(): void {
+   336→   336→    // bed grid on cell centers
+   337→   337→    this.bedGrid = new Float32Array(NX * NZ);
+   338→   338→    for (let j = 0; j < NZ; j++)
+   339→   339→      for (let i = 0; i < NX; i++)
+   340→   340→        this.bedGrid[j * NX + i] = bedAt((i + 0.5) * DX, (j + 0.5) * DZ - LZ / 2);
+   341→   341→
+   342→   342→    const geo = new THREE.PlaneGeometry(LX, LZ, NX - 1, NZ - 1);
+   343→   343→    geo.rotateX(-Math.PI / 2);
+   344→   344→    geo.translate(LX / 2, 0, 0);
+   345→   345→    const pos = geo.attributes.position as THREE.BufferAttribute;
+   346→   346→    const colors = new Float32Array(pos.count * 3);
+   347→   347→    const col = new THREE.Color();
+   348→   348→    const tc = { r: 0, g: 0, b: 0 };
+   349→   349→    for (let i = 0; i < pos.count; i++) {
+   350→   350→      const x = pos.getX(i);
+   351→   351→      const z = pos.getZ(i);
+   352→   352→      const y = this.sampleBed(x, z);
+   353→   353→      pos.setY(i, y);
+   354→   354→      const e = 1.2;
+   355→   355→      const sx = (this.sampleBed(x + e, z) - this.sampleBed(x - e, z)) / (2 * e);
+   356→   356→      const sz = (this.sampleBed(x, z + e) - this.sampleBed(x, z - e)) / (2 * e);
+   357→   357→      const slope = Math.sqrt(sx * sx + sz * sz);
+   358→   358→      terrainColor(x, z, y, slope, tc);
+   359→   359→      col.setRGB(tc.r, tc.g, tc.b, THREE.SRGBColorSpace);
+   360→   360→      colors[i * 3] = col.r;
+   361→   361→      colors[i * 3 + 1] = col.g;
+   362→   362→      colors[i * 3 + 2] = col.b;
+   363→   363→    }
+   364→   364→    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+   365→   365→    geo.computeVertexNormals();
+   366→   366→    const mesh = new THREE.Mesh(
+   367→   367→      geo,
+   368→   368→      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, envMapIntensity: 0.22 }),
+   369→   369→    );
+   370→   370→    mesh.receiveShadow = true;
+   371→   371→    this.scene.add(mesh);
+   372→   372→
+   373→   373→    // surround plane so the domain doesn't float in the void
+   374→   374→    const surround = new THREE.Mesh(
+   375→   375→      new THREE.PlaneGeometry(3000, 3000),
+   376→   376→      new THREE.MeshStandardMaterial({ color: 0xa8ad97, roughness: 1, metalness: 0, envMapIntensity: 0.1 }),
+   377→   377→    );
+   378→   378→    surround.rotation.x = -Math.PI / 2;
+   379→   379→    surround.position.set(LX / 2, 1.2, 0);
+   380→   380→    this.scene.add(surround);
+   381→   381→  }
+   382→   382→
+   383→   383→  private sampleBed(x: number, z: number): number {
+   384→   384→    const fu = clamp((x / DX) - 0.5, 0, NX - 1.001);
+   385→   385→    const fv = clamp((z + LZ / 2) / DZ - 0.5, 0, NZ - 1.001);
+   386→   386→    const i = Math.floor(fu), j = Math.floor(fv);
+   387→   387→    const fx = fu - i, fy = fv - j;
+   388→   388→    const i1 = Math.min(i + 1, NX - 1), j1 = Math.min(j + 1, NZ - 1);
+   389→   389→    const g = this.bedGrid;
+   390→   390→    const a = g[j * NX + i] + (g[j * NX + i1] - g[j * NX + i]) * fx;
+   391→   391→    const b = g[j1 * NX + i] + (g[j1 * NX + i1] - g[j1 * NX + i]) * fx;
+   392→   392→    return a + (b - a) * fy;
+   393→   393→  }
+   394→   394→
+   395→   395→  // ============================================================== GPU resources
+   396→   396→  private mkRT(w: number, h: number, filter: THREE.MagnificationTextureFilter): THREE.WebGLRenderTarget {
+   397→   397→    return new THREE.WebGLRenderTarget(w, h, {
+   398→   398→      minFilter: filter,
+   399→   399→      magFilter: filter,
+   400→   400→      format: THREE.RGBAFormat,
+   401→   401→      type: THREE.FloatType,
+   402→   402→      depthBuffer: false,
+   403→   403→      stencilBuffer: false,
+   404→   404→    });
+   405→   405→  }
+   406→   406→
+   407→   407→  private buildGpuResources(): void {
+   408→   408→    const gl = this.renderer.getContext();
+   409→   409→    gl.getExtension('EXT_color_buffer_float');
+   410→   410→    const floatLinear = !!gl.getExtension('OES_texture_float_linear');
+   411→   411→    const foamFilter = floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
+   412→   412→
+   413→   413→    this.rtStateA = this.mkRT(NX, NZ, THREE.NearestFilter);
+   414→   414→    this.rtStateB = this.mkRT(NX, NZ, THREE.NearestFilter);
+   415→   415→    this.rtEta = this.mkRT(NX, NZ, THREE.NearestFilter);
+   416→   416→    this.rtFoamA = this.mkRT(NX, NZ, foamFilter);
+   417→   417→    this.rtFoamB = this.mkRT(NX, NZ, foamFilter);
+   418→   418→    this.rtSprayA = this.mkRT(SPRAY_N, SPRAY_N, THREE.NearestFilter);
+   419→   419→    this.rtSprayB = this.mkRT(SPRAY_N, SPRAY_N, THREE.NearestFilter);
+   420→   420→    this.rtDown = this.mkRT(DOWN_W, DOWN_H, THREE.NearestFilter);
+   421→   421→    this.rtSnap = this.mkRT(SNAP_W, SNAP_H, floatLinear ? THREE.LinearFilter : THREE.NearestFilter);
+   422→   422→
+   423→   423→    this.structBase = buildStructBase();
+   424→   424→    this.structArr = new Float32Array(this.structBase);
+   425→   425→    this.texBed = new THREE.DataTexture(this.bedGrid, NX, NZ, THREE.RedFormat, THREE.FloatType);
+   426→   426→    this.texBed.minFilter = this.texBed.magFilter = THREE.NearestFilter;
+   427→   427→    this.texBed.needsUpdate = true;
+   428→   428→    this.texStruct = new THREE.DataTexture(this.structArr, NX, NZ, THREE.RedFormat, THREE.FloatType);
+   429→   429→    this.texStruct.minFilter = this.texStruct.magFilter = THREE.NearestFilter;
+   430→   430→    this.texStruct.needsUpdate = true;
+   431→   431→    this.texInit = new THREE.DataTexture(buildInitState(fracToSimLevel(this.liveFrac)), NX, NZ, THREE.RGBAFormat, THREE.FloatType);
+   432→   432→    this.texInit.minFilter = this.texInit.magFilter = THREE.NearestFilter;
+   433→   433→    this.texInit.needsUpdate = true;
+   434→   434→
+   435→   435→    const sprayInit = new Float32Array(SPRAY_N * SPRAY_N * 4);
+   436→   436→    for (let i = 0; i < sprayInit.length; i += 4) {
+   437→   437→      sprayInit[i] = 0; sprayInit[i + 1] = 0; sprayInit[i + 2] = 1; sprayInit[i + 3] = 1;
+   438→   438→    }
+   439→   439→    this.texSprayInit = new THREE.DataTexture(sprayInit, SPRAY_N, SPRAY_N, THREE.RGBAFormat, THREE.FloatType);
+   440→   440→    this.texSprayInit.needsUpdate = true;
+   441→   441→    this.texBlack = new THREE.DataTexture(new Float32Array([0, 0, 0, 1]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+   442→   442→    this.texBlack.needsUpdate = true;
+   443→   443→
+   444→   444→    this.texArr = new THREE.DataTexture(this.arr, DOWN_W, DOWN_H, THREE.RedFormat, THREE.FloatType);
+   445→   445→    this.texArr.minFilter = this.texArr.magFilter = foamFilter;
+   446→   446→    this.texArr.needsUpdate = true;
+   447→   447→
+   448→   448→    const mat = (frag: string, uniforms: Record<string, THREE.IUniform>) =>
+   449→   449→      new THREE.ShaderMaterial({ vertexShader: QUAD_VERT, fragmentShader: frag, uniforms, depthTest: false, depthWrite: false });
+   450→   450→
+   451→   451→    const common = {
+   452→   452→      uState: { value: null },
+   453→   453→      uBed: { value: this.texBed },
+   454→   454→      uStruct: { value: this.texStruct },
+   455→   455→      uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   456→   456→      uCell: { value: new THREE.Vector2(CELL[0], CELL[1]) },
+   457→   457→      uG: { value: this.gravity },
+   458→   458→    };
+   459→   459→
+   460→   460→    this.etaPass = new FullScreenQuad(mat(ETA_FRAG, {
+   461→   461→      ...common,
+   462→   462→      uDt: { value: 0 },
+   463→   463→      uSrcRate: { value: 0 },
+   464→   464→      uSrcBox: { value: new THREE.Vector4(SRC_X0 / LX, SRC_X1 / LX, (-GORGE_HALF_W + LZ / 2) / LZ, (GORGE_HALF_W + LZ / 2) / LZ) },
+   465→   465→      uDriveOn: { value: 1 },
+   466→   466→      uDriveEta: { value: fracToSimLevel(this.liveFrac) },
+   467→   467→      uDriveRate: { value: 1.2 },
+   468→   468→      uDomain: { value: new THREE.Vector2(LX, LZ) },
+   469→   469→      uResMaxX: { value: DAM_X - 0.4 },
+   470→   470→    }));
+   471→   471→    this.velPass = new FullScreenQuad(mat(VEL_FRAG, {
+   472→   472→      ...common,
+   473→   473→      uEtaNew: { value: null },
+   474→   474→      uDt: { value: 0 },
+   475→   475→      uManning: { value: MANNING },
+   476→   476→    }));
+   477→   477→    this.foamPass = new FullScreenQuad(mat(FOAM_FRAG, {
+   478→   478→      ...common,
+   479→   479→      uFoam: { value: null },
+   480→   480→      uDt: { value: 0 },
+   481→   481→    }));
+   482→   482→    this.sprayPass = new FullScreenQuad(mat(SPRAY_FRAG, {
+   483→   483→      uSpray: { value: null },
+   484→   484→      uState: { value: null },
+   485→   485→      uBed: { value: this.texBed },
+   486→   486→      uStruct: { value: this.texStruct },
+   487→   487→      uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   488→   488→      uDt: { value: 0 },
+   489→   489→      uTime: { value: 0 },
+   490→   490→      uSpawnSpeed: { value: 2.6 },
+   491→   491→      uDomain: { value: new THREE.Vector2(LX, LZ) },
+   492→   492→    }));
+   493→   493→    this.copyPass = new FullScreenQuad(mat(COPY_FRAG, { uInit: { value: null } }));
+   494→   494→    this.downPass = new FullScreenQuad(mat(DOWN_FRAG, { uState: { value: null } }));
+   495→   495→    this.snapPass = new FullScreenQuad(mat(SNAP_FRAG, {
+   496→   496→      uState: { value: null },
+   497→   497→      uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   498→   498→    }));
+   499→   499→
+   500→   500→    // count inflow strip cells (gorge inlet)
+   501→   501→    let n = 0;
+   502→   502→    for (let j = 0; j < NZ; j++) {
+   503→   503→      const z = (j + 0.5) * DZ - LZ / 2;
+   504→   504→      if (Math.abs(z) > GORGE_HALF_W) continue;
+   505→   505→      for (let i = Math.ceil(SRC_X0 / DX); i < Math.floor(SRC_X1 / DX); i++)
+   506→   506→        if (this.bedGrid[j * NX + i] < 14.5) n++;
+   507→   507→    }
+   508→   508→    this.stripCells = Math.max(n, 1);
+   509→   509→  }
+   510→   510→
+   511→   511→  private renderTo(q: FullScreenQuad, target: THREE.WebGLRenderTarget | null): void {
+   512→   512→    this.renderer.setRenderTarget(target);
+   513→   513→    q.render(this.renderer);
+   514→   514→    this.renderer.setRenderTarget(null);
+   515→   515→  }
+   516→   516→
+   517→   517→  // =================================================================== water
+   518→   518→  private buildWater(): void {
+   519→   519→    const geo = new THREE.PlaneGeometry(LX, LZ, 320, 192);
+   520→   520→    geo.rotateX(-Math.PI / 2);
+   521→   521→    geo.translate(LX / 2, 0, 0);
+   522→   522→    this.waterMat = new THREE.ShaderMaterial({
+   523→   523→      vertexShader: WATER_VERT,
+   524→   524→      fragmentShader: WATER_FRAG,
+   525→   525→      transparent: true,
+   526→   526→      side: THREE.DoubleSide,
+   527→   527→      uniforms: {
+   528→   528→        uState: { value: null },
+   529→   529→        uBed: { value: this.texBed },
+   530→   530→        uStruct: { value: this.texStruct },
+   531→   531→        uFoam: { value: null },
+   532→   532→        uArrTex: { value: this.texArr },
+   533→   533→        uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   534→   534→        uCell: { value: new THREE.Vector2(CELL[0], CELL[1]) },
+   535→   535→        uDomain: { value: new THREE.Vector2(LX, LZ) },
+   536→   536→        uDownGrid: { value: new THREE.Vector2(DOWN_W, DOWN_H) },
+   537→   537→        uSunDir: { value: this.sunDir },
+   538→   538→        uSunColor: { value: new THREE.Vector3(1.0, 0.92, 0.8) },
+   539→   539→        uCamPos: { value: new THREE.Vector3() },
+   540→   540→        uShowSpeed: { value: 0 },
+   541→   541→        uLayerMode: { value: 0 },
+   542→   542→        uTime: { value: 0 },
+   543→   543→        uRain: { value: 0 },
+   544→   544→        uFogColor: { value: new THREE.Color(0xc6d8ea) },
+   545→   545→        uFogNear: { value: 380 },
+   546→   546→        uFogFar: { value: 1600 },
+   547→   547→      },
+   548→   548→    });
+   549→   549→    const mesh = new THREE.Mesh(geo, this.waterMat);
+   550→   550→    mesh.renderOrder = 10;
+   551→   551→    mesh.frustumCulled = false;
+   552→   552→    this.scene.add(mesh);
+   553→   553→
+   554→   554→    // spray points
+   555→   555→    const pg = new THREE.BufferGeometry();
+   556→   556→    const pp = new Float32Array(SPRAY_N * SPRAY_N * 3);
+   557→   557→    for (let j = 0; j < SPRAY_N; j++)
+   558→   558→      for (let i = 0; i < SPRAY_N; i++) {
+   559→   559→        const k = (j * SPRAY_N + i) * 3;
+   560→   560→        pp[k] = (i + 0.5) / SPRAY_N;
+   561→   561→        pp[k + 1] = (j + 0.5) / SPRAY_N;
+   562→   562→        pp[k + 2] = 0;
+   563→   563→      }
+   564→   564→    pg.setAttribute('position', new THREE.BufferAttribute(pp, 3));
+   565→   565→    this.sprayMat = new THREE.ShaderMaterial({
+   566→   566→      vertexShader: SPRAY_POINTS_VERT,
+   567→   567→      fragmentShader: SPRAY_POINTS_FRAG,
+   568→   568→      transparent: true,
+   569→   569→      depthWrite: false,
+   570→   570→      uniforms: {
+   571→   571→        uSpray: { value: null },
+   572→   572→        uState: { value: null },
+   573→   573→        uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   574→   574→        uDomain: { value: new THREE.Vector2(LX, LZ) },
+   575→   575→        uPixelRatio: { value: this.renderer.getPixelRatio() },
+   576→   576→      },
+   577→   577→    });
+   578→   578→    const points = new THREE.Points(pg, this.sprayMat);
+   579→   579→    points.renderOrder = 11;
+   580→   580→    points.frustumCulled = false;
+   581→   581→    this.scene.add(points);
+   582→   582→  }
+   583→   583→
+   584→   584→  // ==================================================================== props
+   585→   585→  private buildProps(): void {
+   586→   586→    this.dam = buildDam();
+   587→   587→    this.scene.add(this.dam.group);
+   588→   588→    const h = buildHouses();
+   589→   589→    this.houses = h.houses;
+   590→   590→    this.scene.add(h.group);
+   591→   591→    const t = buildTrees();
+   592→   592→    this.trees = t.trees;
+   593→   593→    this.scene.add(t.group);
+   594→   594→    const b = buildBarrels();
+   595→   595→    this.barrels = b.barrels;
+   596→   596→    this.scene.add(b.group);
+   597→   597→    const d = buildDebris();
+   598→   598→    this.chunks = d.chunks;
+   599→   599→    this.scene.add(d.group);
+   600→   600→    const r = buildRoads();
+   601→   601→    this.scene.add(r.group);
+   602→   602→    const g = buildGaugeStations();
+   603→   603→    this.scene.add(g.group);
+   604→   604→    const m = buildInfraMarkers();
+   605→   605→    this.scene.add(m.group);
+   606→   606→    const bo = buildBoulders();
+   607→   607→    this.scene.add(bo.group);
+   608→   608→    const dock = buildDockBoats();
+   609→   609→    this.scene.add(dock.group);
+   610→   610→    for (const br of this.barrels) {
+   611→   611→      this.floaters.push({ mesh: br.mesh, pos: br.pos, vel: br.vel, home: br.mesh.position.clone() });
+   612→   612→    }
+   613→   613→    for (const bt of dock.boats) {
+   614→   614→      this.floaters.push({
+   615→   615→        mesh: bt.mesh,
+   616→   616→        pos: bt.mesh.position.clone(),
+   617→   617→        vel: new THREE.Vector3(),
+   618→   618→        home: bt.mesh.position.clone(),
+   619→   619→      });
+   620→   620→    }
+   621→   621→  }
+   622→   622→
+   623→   623→  // ==================================================================== rain
+   624→   624→  private buildRain(): void {
+   625→   625→    const N = 1100;
+   626→   626→    this.rainPos = new Float32Array(N * 6);
+   627→   627→    const p = this.rainPos;
+   628→   628→    for (let i = 0; i < N; i++) {
+   629→   629→      const x = -30 + Math.random() * (LX + 110);
+   630→   630→      const y = Math.random() * 82;
+   631→   631→      const z = -LZ / 2 - 40 + Math.random() * (LZ + 80);
+   632→   632→      p[i * 6] = x; p[i * 6 + 1] = y; p[i * 6 + 2] = z;
+   633→   633→      p[i * 6 + 3] = x + 0.26; p[i * 6 + 4] = y + 1.5; p[i * 6 + 5] = z + 0.09;
+   634→   634→    }
+   635→   635→    const geo = new THREE.BufferGeometry();
+   636→   636→    geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+   637→   637→    const mat = new THREE.LineBasicMaterial({ color: 0xaaccee, transparent: true, opacity: 0, depthWrite: false });
+   638→   638→    this.rainMesh = new THREE.LineSegments(geo, mat);
+   639→   639→    this.rainMesh.visible = false;
+   640→   640→    this.rainMesh.frustumCulled = false;
+   641→   641→    this.rainMesh.renderOrder = 9;
+   642→   642→    this.scene.add(this.rainMesh);
+   643→   643→  }
+   644→   644→
+   645→   645→  // per-frame storm driver: rain streaks, darkened sky/fog, lightning flashes
+   646→   646→  private updateWeather(dtReal: number): void {
+   647→   647→    const target = this.rainInflow > 0 ? (this.rainHeavy ? 1 : 0.55) : 0;
+   648→   648→    this.rainVis += (target - this.rainVis) * Math.min(1, dtReal * 1.4);
+   649→   649→    const rv = this.rainVis;
+   650→   650→
+   651→   651→    if (this.rainMesh) {
+   652→   652→      this.rainMesh.visible = rv > 0.02;
+   653→   653→      if (rv > 0.02) {
+   654→   654→        const p = this.rainPos;
+   655→   655→        const n = p.length / 6;
+   656→   656→        const fall = 46 * dtReal;
+   657→   657→        const drift = 8 * dtReal;
+   658→   658→        for (let i = 0; i < n; i++) {
+   659→   659→          const k = i * 6;
+   660→   660→          p[k] += drift; p[k + 1] -= fall; p[k + 2] += drift * 0.35;
+   661→   661→          p[k + 3] = p[k] + 0.26; p[k + 4] = p[k + 1] + 1.5; p[k + 5] = p[k + 2] + 0.09;
+   662→   662→          if (p[k + 1] < 2.5) {
+   663→   663→            const x = -30 + Math.random() * (LX + 110);
+   664→   664→            const y = 48 + Math.random() * 34;
+   665→   665→            const z = -LZ / 2 - 40 + Math.random() * (LZ + 80);
+   666→   666→            p[k] = x; p[k + 1] = y; p[k + 2] = z;
+   667→   667→            p[k + 3] = x + 0.26; p[k + 4] = y + 1.5; p[k + 5] = z + 0.09;
+   668→   668→          }
+   669→   669→        }
+   670→   670→        (this.rainMesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+   671→   671→        (this.rainMesh.material as THREE.LineBasicMaterial).opacity = 0.38 * rv;
+   672→   672→      }
+   673→   673→    }
+   674→   674→
+   675→   675→    // occasional lightning during heavy rain
+   676→   676→    this.flash *= Math.exp(-dtReal * 6.5);
+   677→   677→    if (rv > 0.6) {
+   678→   678→      this.boltTimer -= dtReal;
+   679→   679→      if (this.boltTimer <= 0) {
+   680→   680→        this.boltTimer = 5 + Math.random() * 10;
+   681→   681→        this.flash = 0.7 + Math.random() * 0.5;
+   682→   682→      }
+   683→   683→    }
+   684→   684→
+   685→   685→    // dim / storm the atmosphere
+   686→   686→    this.sunLight.intensity = 2.1 * (1 - 0.7 * rv) + this.flash * 5.5;
+   687→   687→    this.sunLight.color.setHex(this.flash > 0.25 ? 0xdfe8ff : 0xffe8c8);
+   688→   688→    this.hemiLight.intensity = 0.45 * (1 - 0.4 * rv) + this.flash * 1.2;
+   689→   689→    this.scene.environmentIntensity = 0.32 * (1 - 0.5 * rv);
+   690→   690→    const fog = this.scene.fog as THREE.Fog;
+   691→   691→    fog.color.copy(this.fogDay).lerp(this.fogStorm, rv * 0.85);
+   692→   692→    fog.near = 380 - 200 * rv;
+   693→   693→    fog.far = 1600 - 700 * rv;
+   694→   694→    this.renderer.toneMappingExposure = 0.85 - 0.13 * rv + this.flash * 0.12;
+   695→   695→    const su = this.skyU;
+   696→   696→    if (su) {
+   697→   697→      su.turbidity.value = 5.5 + 4.5 * rv;
+   698→   698→      su.rayleigh.value = Math.max(2.4 - 1.7 * rv, 0.3);
+   699→   699→      su.mieCoefficient.value = 0.006 + 0.02 * rv;
+   700→   700→    }
+   701→   701→
+   702→   702→    // water shader: choppier ripples + storm fog match
+   703→   703→    const wu = this.waterMat.uniforms;
+   704→   704→    wu.uRain.value = rv;
+   705→   705→    (wu.uFogColor.value as THREE.Color).copy(fog.color);
+   706→   706→    wu.uFogNear.value = fog.near;
+   707→   707→    wu.uFogFar.value = fog.far;
+   708→   708→  }
+   709→   709→
+   710→   710→  // ================================================================ sim stepping
+   711→   711→  private swapState(): void {
+   712→   712→    const t = this.curState;
+   713→   713→    this.curState = this.nextState;
+   714→   714→    this.nextState = t;
+   715→   715→  }
+   716→   716→
+   717→   717→  private simSubstep(dt: number): void {
+   718→   718→    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+   719→   719→    eu.uState.value = this.curState.texture;
+   720→   720→    eu.uDt.value = dt;
+   721→   721→    eu.uG.value = this.gravity;
+   722→   722→    eu.uSrcRate.value = this.srcRate;
+   723→   723→    this.renderTo(this.etaPass, this.rtEta);
+   724→   724→
+   725→   725→    const vu = (this.velPass.material as THREE.ShaderMaterial).uniforms;
+   726→   726→    vu.uState.value = this.curState.texture;
+   727→   727→    vu.uEtaNew.value = this.rtEta.texture;
+   728→   728→    vu.uDt.value = dt;
+   729→   729→    vu.uG.value = this.gravity;
+   730→   730→    this.renderTo(this.velPass, this.nextState);
+   731→   731→    this.swapState();
+   732→   732→
+   733→   733→    if (this.foamOn) {
+   734→   734→      const fu = (this.foamPass.material as THREE.ShaderMaterial).uniforms;
+
+[showing lines 35-734 of 1542; use offset=735 with limit to continue reading]

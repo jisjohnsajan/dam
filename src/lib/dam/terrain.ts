@@ -31,6 +31,14 @@ export const GORGE_HALF_W = 3.6; // inflow band |z| < GORGE_HALF_W
 export const SRC_X0 = 1.6;
 export const SRC_X1 = 6.0;
 
+// Stilling-basin apron: concrete slab on the channel bed at the dam toe.
+// props.ts draws the visual slab at the SAME elevation so the flood visibly
+// rides over it instead of vanishing under a floating slab.
+export const APRON_X0 = 120.6;
+export const APRON_X1 = 134.6;
+export const APRON_HALF_W = 30;
+export const APRON_TOP = bedAt(DAM_X + 13.5, 0) + 0.35; // slab top elevation (m)
+
 // ---------------------------------------------------------------- value noise
 function hash2(x: number, y: number): number {
   const h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
@@ -91,7 +99,10 @@ export function bedAt(x: number, z: number): number {
     const carve = smoothstep(GORGE_HALF_W, 8.5, wz); // 0 inside gorge, 1 outside
     if (x < 7) floor += (7 - x) * (7 - x) * 0.5 * (0.1 + 0.9 * carve);
     if (wz < GORGE_HALF_W + 1.2) {
-      floor = Math.min(floor, 13.4 - x * 0.09); // gorge floor feeds the reservoir
+      // gorge floor feeds the reservoir; a rapids sill ramps up at the very
+      // edge of the domain so the water ends INSIDE the notch, hidden by the
+      // mountain walls, instead of being sliced off at the boundary plane
+      floor = Math.min(floor, 13.4 - x * 0.09 + smoothstep(3.6, 0.6, x) * 10.0);
     }
   }
 
@@ -123,6 +134,14 @@ export function buildStructBase(): Float32Array {
           arr[j * NX + i] = e;
         }
       }
+
+      // stilling-basin apron slab — the flood rides over this shelf and the
+      // baffle blocks churn it into whitewater (matches the visual slab)
+      if (x >= APRON_X0 && x <= APRON_X1 && Math.abs(z) <= APRON_HALF_W) {
+        if (APRON_TOP > bedAt(x, z)) {
+          arr[j * NX + i] = Math.max(arr[j * NX + i], APRON_TOP);
+        }
+      }
     }
   }
   return arr;
@@ -150,8 +169,13 @@ export function applyStructState(
   if (breach && breach.count > 0 && breach.depth01 > 0) {
     const zA = BLOCK_Z0 + breach.start * BLOCK_W;
     const zB = zA + breach.count * BLOCK_W;
+    // Clear the FULL dam thickness (holding section x<=115.2 AND the downstream
+    // batter down to the toe x~120.6). The visual monolith blocks sink rigidly,
+    // so the simulated structure must drop across their whole footprint —
+    // otherwise an invisible wedge of "intact batter" keeps blocking the flow
+    // behind the visibly-open gap and the breach jet never pours through.
     const i0 = Math.max(0, Math.floor(111.7 / DX));
-    const i1 = Math.min(NX - 1, Math.ceil(115.4 / DX));
+    const i1 = Math.min(NX - 1, Math.ceil(120.9 / DX));
     const j0 = Math.max(0, Math.floor((zA + LZ / 2) / DZ));
     const j1 = Math.min(NZ - 1, Math.ceil((zB + LZ / 2) / DZ));
     for (let j = j0; j <= j1; j++) {
@@ -194,8 +218,15 @@ export function buildInitState(resLevel = RES_LEVEL): Float32Array {
       if (x < DAM_X - 0.3) {
         if (b < resLevel) eta = resLevel; // reservoir
       } else if (b < 10.2) {
-        eta = b + 0.4; // base river flow downstream
-        u = 0.7;
+        // base river confined to the incised channel (where the channel cut is
+        // significant) — a full-valley sheet reads as a flooded floodplain and
+        // ends in a hard straight edge at the domain boundary
+        const inChannel = Math.exp(-(z * z) / 100) > 0.45; // |z| <~ 10.7 m
+        if (inChannel) {
+          const taper = 1 - smoothstep(176, 191, x); // sink the river before the edge
+          eta = b + 0.4 * taper;
+          u = 0.7;
+        }
       }
       const k = (j * NX + i) * 4;
       arr[k] = eta;

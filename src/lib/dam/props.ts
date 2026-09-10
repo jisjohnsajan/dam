@@ -1,7 +1,7 @@
 // 3D props: detailed dam monoliths & gates, Kerala-style houses, palms & trees,
 // roads & bridge, gauge stations, infra markers, floating debris, audio.
 import * as THREE from 'three';
-import { LX, LZ, DAM_X, CREST, RES_LEVEL, bedAt, BLOCK_Z0, BLOCK_Z1, BLOCK_N, BLOCK_W } from './terrain';
+import { LX, LZ, DAM_X, CREST, RES_LEVEL, bedAt, APRON_TOP, BLOCK_Z0, BLOCK_Z1, BLOCK_N, BLOCK_W } from './terrain';
 import { GAUGES } from '@/lib/damsafe/config';
 
 // ---------------------------------------------------------------- CPU flow field
@@ -304,15 +304,18 @@ export function buildDam(): DamProps {
     breachBlocks.push({ group: bg, z0, z1 });
   }
 
-  // stilling-basin apron + baffle blocks downstream
-  const apron = new THREE.Mesh(new THREE.BoxGeometry(13, 0.35, 60), concreteDark);
-  apron.position.set(DAM_X + 13.5, 10.35, 0);
+  // stilling-basin apron + baffle blocks downstream — sits ON the channel bed
+  // at the same elevation as the simulated apron shelf (APRON_TOP), so breach
+  // flow visibly crashes onto it and churns over the baffles instead of
+  // disappearing under a floating slab
+  const apron = new THREE.Mesh(new THREE.BoxGeometry(14, 0.35, 60), concreteDark);
+  apron.position.set(DAM_X + 15.6, APRON_TOP - 0.175, 0);
   apron.receiveShadow = true;
   group.add(apron);
   for (let i = 0; i < 3; i++) {
     for (let z = -24; z <= 24; z += 6) {
       const baf = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 1.4), concreteDark);
-      baf.position.set(DAM_X + 10 + i * 4.5, 10.95, z + (i % 2) * 3);
+      baf.position.set(DAM_X + 10 + i * 4.5, APRON_TOP + 0.55, z + (i % 2) * 3);
       baf.castShadow = true;
       group.add(baf);
     }
