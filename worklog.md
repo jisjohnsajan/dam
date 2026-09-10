@@ -268,3 +268,72 @@ Stage Summary:
   on the bed).
 - Verification screenshots: tool-results/fix_boot.png, fix_breach3-8.png, fix_flood1-3.png,
   fix_gates1-2.png, fix_reset.png, fix_hero.png.
+
+---
+Task ID: fix-errors-round2
+Agent: Super Z (main agent)
+Task: Fix the errors in the user's screenshot — a huge waterfall pouring off the LEFT
+terrain edge during rain/storm, water cascading over the dam when no failure was
+requested, and a Flood-overtopping scenario that stayed stuck at "RESERVOIR SURCHARGING…"
+forever without ever breaching.
+
+Work Log:
+- Diagnosed in headless browser by reproducing the user's state (storm rain + flood
+  overtop). Three root causes found:
+  1. GORGE SILL WAS A NO-OP (terrain.ts bedAt): the "rapids ramp" used
+     floor = min(floor, 13.4 - x*0.09 + ss*10) but the mountain-wall ramp already
+     holds the notch floor at ~15.45 m at x=0, so min() never picked the sill —
+     the reservoir bed at the domain boundary sat 6-9 m BELOW every water level.
+     The lake surface was always sliced at x=0 inside the gorge notch; at storm /
+     overtop levels (24 m) that slice read as a giant waterfall off the edge of
+     the world (the user's screenshot).
+  2. LIVE STORM OVERTOPPED THE DAM (engine.ts setRain): live drive target was
+     capped at 24.2 m — above CREST 23 — so merely toggling "Storm rain" in LIVE
+     monitoring pushed the lake over the crest (silent dam-failure animation) and
+     over the broken sill (edge waterfall). Moderate rain (23.15) also grazed over.
+  3. CLOSED-GATE SILL BELOW SLIDER MAX: SPILL_CREST_CLOSED 22.2 < live slider max
+     22.7, so a full reservoir leaked through visually-closed gates.
+  4. BONUS BUG FOUND WHILE VERIFYING: triggerBreachErosion() refused breachT===null,
+     but the overtopping scenario never arms breachT -> "Flood overtop" surged to
+     24 m forever and NEVER eroded the dam (stuck at RESERVOIR SURCHARGING…).
+     Also structural/piping never fired shake/audio/debris because
+     triggerBreachErosion was only called from the overtop branch.
+- Fixes:
+  * terrain.ts buildStructBase: watertight upstream boundary plug (x<0.6 -> top 30 m,
+    invisible, hidden inside the notch) — seals every achievable level (max 24.4).
+  * terrain.ts bedAt: end sill that actually applies — floor += ss(2.6,0.4,x)*13.2
+    inside the gorge band (fades out by wz 6.4) so the notch floor rises to ~28.6 m
+    at the boundary and the shoreline tucks onto a natural rock ramp inside the notch.
+  * terrain.ts: SPILL_CREST_CLOSED 22.2 -> 22.8 (above slider max 22.7).
+  * props.ts: spillway sill monolith top 22.8; gate mesh 7.5 tall @ y 19.05
+    (closed gate top = 22.8 exactly).
+  * engine.ts: gate reset/open y 18.85 -> 19.05; setRain live cap 24.2 -> 22.6
+    (LIVE monitoring can never overtop — failure remains an explicit WHAT-IF action).
+  * engine.ts: triggerBreachErosion guard fixed (allows armed-null start),
+    fireBreachFx() flag fires shake/audio/debris exactly once, now called both from
+    the overtop branch AND when structural/piping breachT crosses zero in
+    stepScenario; breachFx reset in runScenario()/reset().
+- Browser-verified end to end (agent-browser):
+  * Boot: lake ends on the new rock sill inside the notch; inflow rapids visible;
+    top view clean; no console/page errors.
+  * Storm rain (LIVE): level caps exactly 22.6, NO cascade, NO edge waterfall.
+  * Live slider 100%: level 22.7 < sill 22.8 < crest 23 — no leak, no overtop.
+  * Flood overtop: surcharge 24.0 -> cascade over crest (intended) -> breach NOW
+    ERODES (0.14 -> 0.59 observed), outflow peaked 10,950 m3/s, flood sweeps the
+    village, upstream notch stays sealed the whole time.
+  * Dam break (structural): breachFx true + 14 debris chunks spawn (effects
+    previously never fired), jet pours only through the visible gap.
+  * Open gates: sill animates 22.8 -> 15.5, release flow begins, gates lift.
+  * Reset: clean return to LIVE, drive pulls level back to 21.66.
+  * tsc clean (src), eslint clean on changed files, dev.log 200s only.
+
+Stage Summary:
+- The "waterfall at the edge of the world" is gone: the reservoir is now a closed
+  basin at every operable level, with the shoreline hidden on a rock ramp inside
+  the upstream gorge notch.
+- LIVE mode semantics restored: storm rain = rain + high lake only; dam failure
+  animations happen only via Dam break / Flood overtop / Pipe burst actions.
+- Flood overtop now completes its full arc: surcharge -> crest cascade -> erosion
+  -> breach -> flood wave. Structural/piping runs now fire the failure effects.
+- Key files touched: src/lib/dam/terrain.ts, src/lib/dam/props.ts, src/lib/dam/engine.ts.
+- Verification screenshots: tool-results/fix2_*.png.

@@ -14,7 +14,10 @@ export const CREST = 23; // main crest elevation (m)
 export const RES_LEVEL = 21.5; // default reservoir surface elevation
 export const SPILL_Z0 = 18; // spillway notch band (z)
 export const SPILL_Z1 = 30;
-export const SPILL_CREST_CLOSED = 22.2; // gate-top sill when gates closed
+export const SPILL_CREST_CLOSED = 22.8; // gate-top sill when gates closed
+// (kept above the live-operable level range — slider max 22.7 — so a full
+// reservoir never leaks through visually-closed gates; only "Open gates"
+// or a real overtopping scenario can ever put water through the spillway)
 export const GATE_OPEN_ELEV = 15.5; // sill when gates fully open
 
 // The central dam section is split into 5 monolith blocks so a breach opens
@@ -99,10 +102,16 @@ export function bedAt(x: number, z: number): number {
     const carve = smoothstep(GORGE_HALF_W, 8.5, wz); // 0 inside gorge, 1 outside
     if (x < 7) floor += (7 - x) * (7 - x) * 0.5 * (0.1 + 0.9 * carve);
     if (wz < GORGE_HALF_W + 1.2) {
-      // gorge floor feeds the reservoir; a rapids sill ramps up at the very
-      // edge of the domain so the water ends INSIDE the notch, hidden by the
-      // mountain walls, instead of being sliced off at the boundary plane
+      // gorge floor feeds the reservoir; a rapids channel ramps gently down
+      // toward the lake (the visible inflow river)
       floor = Math.min(floor, 13.4 - x * 0.09 + smoothstep(3.6, 0.6, x) * 10.0);
+      // end sill: the notch floor rises back ABOVE every achievable water
+      // level (scenario drive caps at 24.4 m) right at the domain edge, so
+      // the reservoir shoreline always tucks onto this rock ramp INSIDE the
+      // notch instead of being sliced off by the boundary plane (which read
+      // as a waterfall pouring off the edge of the world at high levels).
+      const band = 1 - smoothstep(GORGE_HALF_W + 1.2, GORGE_HALF_W + 2.8, wz);
+      floor += smoothstep(2.6, 0.4, x) * 13.2 * band;
     }
   }
 
@@ -141,6 +150,17 @@ export function buildStructBase(): Float32Array {
         if (APRON_TOP > bedAt(x, z)) {
           arr[j * NX + i] = Math.max(arr[j * NX + i], APRON_TOP);
         }
+      }
+
+      // Watertight upstream boundary plug. The gorge notch is open at the
+      // domain edge (analytic bed ~15 m there, far below every water level),
+      // so the lake surface used to be sliced at x = 0 — at storm / overtop
+      // levels (24 m) that slice read as a huge waterfall pouring off the
+      // edge of the world. A tall invisible wall just inside the boundary,
+      // hidden deep inside the mountain notch, seals EVERY achievable water
+      // level (max scenario drive 24.4 m) inside the domain.
+      if (x < 0.6) {
+        arr[j * NX + i] = Math.max(arr[j * NX + i], 30.0);
       }
     }
   }

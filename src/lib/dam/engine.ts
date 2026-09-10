@@ -186,6 +186,7 @@ export class DamSim {
   private breachDepth01 = 0;
   private breachInverts: number[] = [];
   private breachDelays: number[] = []; // staggered per-block failure (demo s)
+  private breachFx = false; // failure effects (shake/audio/debris) fired once
   private gateT: number | null = null;
   private gateElev: number | null = null;
   private overtopT = 0;
@@ -826,6 +827,7 @@ export class DamSim {
     this.breachSpan = null;
     this.breachT = null;
     this.breachDepth01 = 0;
+    this.breachFx = false;
     this.structDirty = true;
 
     // reservoir set to the scenario level (drive takes it there quickly)
@@ -847,9 +849,20 @@ export class DamSim {
     this.audio.burst(0.2);
   }
 
+  // Starts the breach erosion clock and fires the failure effects (camera
+  // shake, audio burst, concrete debris). Runs when the scenario decides the
+  // dam begins to fail: overtopping reaches it after the 7 s surcharge, and
+  // structural / piping reach it through the armed negative breachT crossing
+  // zero in stepScenario.
   private triggerBreachErosion(): void {
-    if (this.breachT === null || this.breachT >= 0) return;
+    if (this.breachT !== null && this.breachT >= 0) return; // already eroding
     this.breachT = 0;
+    this.fireBreachFx();
+  }
+
+  private fireBreachFx(): void {
+    if (this.breachFx) return;
+    this.breachFx = true;
     this.shake = 1;
     this.audio.burst(1);
     this.spawnDebris();
@@ -872,6 +885,7 @@ export class DamSim {
     this.breachDepth01 = 0;
     this.breachInverts = [];
     this.breachDelays = [];
+    this.breachFx = false;
     this.gateT = null;
     this.gateElev = null;
     this.overtopT = 0;
@@ -885,7 +899,7 @@ export class DamSim {
       blk.group.rotation.set(0, 0, 0);
       blk.group.visible = true;
     }
-    for (const g of this.dam.gates) g.position.y = 18.85;
+    for (const g of this.dam.gates) g.position.y = 19.05;
     for (const c of this.chunks) {
       c.active = false;
       c.mesh.visible = false;
@@ -1021,7 +1035,7 @@ export class DamSim {
       this.gateT = Math.min(1, this.gateT + dt / 2.5);
       const e = easeInOut(this.gateT);
       this.gateElev = SPILL_CREST_CLOSED + (GATE_OPEN_ELEV - SPILL_CREST_CLOSED) * e;
-      for (const g of this.dam.gates) g.position.y = 18.85 + 6.9 * e;
+      for (const g of this.dam.gates) g.position.y = 19.05 + 6.9 * e;
       this.structDirty = true;
     }
 
@@ -1052,6 +1066,8 @@ export class DamSim {
     if (this.breachT !== null && this.breachSpan) {
       this.breachT += dt;
       if (this.breachT > 0) {
+        // just crossed the arming delay — fire the failure effects exactly once
+        if (this.breachT <= dt) this.fireBreachFx();
         const tau = this.breachTau;
         const depths: number[] = [];
         let minP = 1;
@@ -1449,13 +1465,17 @@ export class DamSim {
 
   // live-mode storm: inflow surge + reservoir swell + rain visuals. Also works
   // during a scenario, where it simply overrides the scenario rain inflow.
+  // LIVE monitoring must never overtop the dam by itself: the drive target is
+  // capped below the closed-gate sill (22.8) and the crest (23) so a storm
+  // swells the lake dramatically without spawning a failure animation —
+  // overtopping remains an explicit WHAT-IF scenario.
   setRain(r: RainScenario): void {
     this.rainHeavy = r === 'heavy';
     this.rainInflow = r === 'none' ? 0 : r === 'moderate' ? 26 : 64;
     if (!this.scenario) {
       const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
       const boost = this.rainInflow > 0 ? (this.rainHeavy ? 1.25 : 0.45) : 0;
-      eu.uDriveEta.value = Math.min(fracToSimLevel(this.liveFrac) + boost, 24.2);
+      eu.uDriveEta.value = Math.min(fracToSimLevel(this.liveFrac) + boost, 22.6);
       eu.uDriveOn.value = 1;
     }
   }

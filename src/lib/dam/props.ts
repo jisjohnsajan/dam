@@ -196,7 +196,7 @@ export function buildDam(): DamProps {
   // intact outer monoliths
   group.add(monolith(-38, BLOCK_Z0, CREST, concrete));
   group.add(monolith(BLOCK_Z1, 18, CREST, concrete));
-  group.add(monolith(18, 30, 22.2, concreteDark)); // spillway sill
+  group.add(monolith(18, 30, 22.8, concreteDark)); // spillway sill (matches SPILL_CREST_CLOSED)
   group.add(monolith(30, 38, CREST, concrete));
 
   // --- spillway: 3 piers, 2 radial gates, hoist bridge, trunnion arms
@@ -226,8 +226,8 @@ export function buildDam(): DamProps {
 
   const gates: THREE.Mesh[] = [];
   for (const zc of [21.3, 26.7]) {
-    const gate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 6.9, 4.9), steel);
-    gate.position.set(DAM_X + 2.2, 18.85, zc);
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 7.5, 4.9), steel);
+    gate.position.set(DAM_X + 2.2, 19.05, zc); // closed gate top = 22.8 (sill elevation)
     gate.castShadow = true;
     group.add(gate);
     gates.push(gate);
