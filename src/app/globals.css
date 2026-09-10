@@ -120,3 +120,18 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* DAMSAFE 3D panel scrollbars */
+.damsafe-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.damsafe-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.damsafe-scroll::-webkit-scrollbar-thumb {
+  background: rgba(34, 211, 238, 0.25);
+  border-radius: 3px;
+}
+.damsafe-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(34, 211, 238, 0.45);
+}

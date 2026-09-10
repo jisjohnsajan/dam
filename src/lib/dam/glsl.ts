@@ -88,6 +88,11 @@ ${SIM_COMMON}
 uniform float uDt;
 uniform float uSrcRate;     // eta raise rate (m/s) inside source box
 uniform vec4 uSrcBox;       // xmin, xmax, vmin, vmax (uv space)
+uniform float uDriveOn;     // reservoir level control (live monitoring)
+uniform float uDriveEta;    // target level (m)
+uniform float uDriveRate;   // m/s
+uniform vec2 uDomain;
+uniform float uResMaxX;     // drive only applies upstream of the dam
 
 void main() {
   vec2 uvL = vUv - vec2(uTexel.x, 0.0);
@@ -108,9 +113,27 @@ void main() {
 
   float eta = C.x - uDt * ((F_r - F_l) / uCell.x + (F_u - F_d) / uCell.y);
 
-  // river inflow strip
+  // river inflow strip (visible gorge inlet at the upstream end)
   if (vUv.x > uSrcBox.x && vUv.x < uSrcBox.y && vUv.y > uSrcBox.z && vUv.y < uSrcBox.w) {
     eta += uSrcRate * uDt;
+  }
+
+  // reservoir level control — smoothly drives the lake toward the slider target.
+  // Lowering applies everywhere (drains shelf cells); raising only where the bed
+  // is below the target so dry land above the target level never floods.
+  if (uDriveOn > 0.5) {
+    float wx = vUv.x * uDomain.x;
+    if (wx < uResMaxX) {
+      float d = uDriveEta - eta;
+      if (d < 0.0) {
+        eta += clamp(d, -uDriveRate * uDt, uDriveRate * uDt);
+      } else {
+        float b = bedAt(vUv);
+        if (b < uDriveEta - 0.05) {
+          eta += clamp(d, -uDriveRate * uDt, uDriveRate * uDt);
+        }
+      }
+    }
   }
 
   // safety clamps (max 1 m change per substep, hard ceiling)
@@ -211,7 +234,7 @@ void main() {
   float strain = abs(dudx) + abs(dvdz) + abs(dudz + dvdx);
   float speed = length(C.yz);
 
-  float dep = smoothstep(1.5, 4.0, speed) * 0.55 + smoothstep(0.8, 2.6, strain) * 0.95;
+  float dep = smoothstep(1.2, 3.6, speed) * 0.55 + smoothstep(0.7, 2.4, strain) * 0.95;
   foam = foam * 0.972 + dep * uDt * 1.7;
   if (h < 0.08) foam *= 0.86;
 
@@ -260,7 +283,7 @@ void main() {
     vec4 st = texture2D(uState, cuv);
     float h = max(st.x - bedAt(cuv), 0.0);
     float sp = length(st.yz);
-    if (sp > uSpawnSpeed && h > 0.06 && h < 5.0 && r.w < 0.45) {
+    if (sp > uSpawnSpeed && h > 0.06 && h < 5.5 && r.w < 0.5) {
       gl_FragColor = vec4(cuv.x * uDomain.x, cuv.y * uDomain.y, 0.0, 0.7 + 1.6 * r.z);
     } else {
       gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
@@ -275,7 +298,7 @@ void main() {
 }
 `;
 
-// ------------------------------------------------------------------ pass: copy / down
+// ------------------------------------------------------------------ pass: copy / down / snap
 export const COPY_FRAG = /* glsl */ `
 varying vec2 vUv;
 uniform sampler2D uInit;
@@ -289,6 +312,26 @@ varying vec2 vUv;
 uniform sampler2D uState;
 void main() {
   gl_FragColor = texture2D(uState, vUv);
+}
+`;
+
+// bilinear downsample of the full-res state for timeline snapshots
+export const SNAP_FRAG = /* glsl */ `
+varying vec2 vUv;
+uniform sampler2D uState;
+uniform vec2 uTexel;
+vec4 sampleBil(sampler2D tex, vec2 uv, vec2 texel) {
+  vec2 st = uv / texel - 0.5;
+  vec2 base = (floor(st) + 0.5) * texel;
+  vec2 f = fract(st);
+  vec4 a = texture2D(tex, base);
+  vec4 b = texture2D(tex, base + vec2(texel.x, 0.0));
+  vec4 c = texture2D(tex, base + vec2(0.0, texel.y));
+  vec4 d = texture2D(tex, base + texel);
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+void main() {
+  gl_FragColor = sampleBil(uState, vUv, uTexel);
 }
 `;
 
@@ -326,13 +369,16 @@ uniform sampler2D uState;
 uniform sampler2D uBed;
 uniform sampler2D uStruct;
 uniform sampler2D uFoam;
+uniform sampler2D uArrTex;   // arrival time (s), 48x28
 uniform vec2 uTexel;
 uniform vec2 uCell;
 uniform vec2 uDomain;
+uniform vec2 uDownGrid;      // 48, 28
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 uniform vec3 uCamPos;
 uniform float uShowSpeed;
+uniform float uLayerMode;    // 0 natural, 1 depth, 2 velocity, 3 arrival
 uniform float uTime;
 uniform vec3 uFogColor;
 uniform float uFogNear;
@@ -368,8 +414,8 @@ float vnoise(vec2 p) {
 }
 vec3 skyColor(vec3 dir) {
   float t = clamp(dir.y, 0.0, 1.0);
-  vec3 horizon = vec3(0.60, 0.72, 0.84);
-  vec3 zenith = vec3(0.11, 0.30, 0.58);
+  vec3 horizon = vec3(0.66, 0.78, 0.90);
+  vec3 zenith = vec3(0.10, 0.30, 0.62);
   vec3 col = mix(horizon, zenith, pow(t, 0.5));
   float sd = max(dot(dir, uSunDir), 0.0);
   col += uSunColor * pow(sd, 700.0) * 4.0;
@@ -379,6 +425,25 @@ vec3 skyColor(vec3 dir) {
 vec3 jet(float t) {
   t = clamp(t, 0.0, 1.0);
   return clamp(vec3(1.5 - abs(4.0 * t - 3.0), 1.5 - abs(4.0 * t - 2.0), 1.5 - abs(4.0 * t - 1.0)), 0.0, 1.0);
+}
+// depth ramp (hydrology convention): shallow -> deep = cyan -> navy
+vec3 depthRamp(float t) {
+  t = clamp(t, 0.0, 1.0);
+  vec3 c0 = vec3(0.16, 0.55, 0.75);
+  vec3 c1 = vec3(0.10, 0.42, 0.65);
+  vec3 c2 = vec3(0.06, 0.25, 0.52);
+  vec3 c3 = vec3(0.03, 0.11, 0.34);
+  if (t < 0.33) return mix(c0, c1, t / 0.33);
+  if (t < 0.66) return mix(c1, c2, (t - 0.33) / 0.33);
+  return mix(c2, c3, (t - 0.66) / 0.34);
+}
+// arrival ramp: fast -> slow = green -> yellow -> orange -> red -> purple
+vec3 arrivalRamp(float t) {
+  t = clamp(t, 0.0, 1.0);
+  if (t < 0.25) return mix(vec3(0.16, 0.75, 0.30), vec3(0.65, 0.82, 0.15), t / 0.25);
+  if (t < 0.50) return mix(vec3(0.65, 0.82, 0.15), vec3(0.98, 0.72, 0.10), (t - 0.25) / 0.25);
+  if (t < 0.75) return mix(vec3(0.98, 0.72, 0.10), vec3(0.90, 0.25, 0.10), (t - 0.50) / 0.25);
+  return mix(vec3(0.90, 0.25, 0.10), vec3(0.52, 0.10, 0.55), (t - 0.75) / 0.25);
 }
 
 void main() {
@@ -395,42 +460,59 @@ void main() {
   float eU = sampleBil(uState, vUvw + vec2(0.0, uTexel.y), uTexel).x;
   vec3 N = normalize(vec3(-(eR - eL) / (2.0 * uCell.x), 1.0, -(eU - eD) / (2.0 * uCell.y)));
 
-  // animated micro-ripples for specular sparkle
-  float n1 = vnoise(vWorld.xz * 0.9 + vec2(uTime * 0.7, uTime * 0.45));
-  float n2 = vnoise(vWorld.xz * 2.6 - vec2(uTime * 1.1, uTime * 0.8));
-  N = normalize(N + vec3(n1 - 0.5, 0.0, n2 - 0.5) * 0.05);
+  vec2 vel = st.yz;
+  float speed = length(vel);
+
+  // animated micro-ripples, advected by the flow for a live look
+  vec2 flowOff = vel * uTime * 0.55;
+  float n1 = vnoise(vWorld.xz * 0.9 + vec2(uTime * 0.7, uTime * 0.45) + flowOff * 0.35);
+  float n2 = vnoise(vWorld.xz * 2.6 - vec2(uTime * 1.1, uTime * 0.8) + flowOff);
+  float n3 = vnoise(vWorld.xz * 6.5 + vec2(uTime * 1.9, -uTime * 1.4));
+  vec3 rip = vec3(n1 - 0.5, 0.0, n2 - 0.5) * 0.055 + vec3(n3 - 0.5, 0.0, n1 - 0.5) * 0.022;
+  N = normalize(N + rip);
 
   vec3 V = normalize(uCamPos - vWorld);
   vec3 R = reflect(-V, N);
   R.y = abs(R.y) + 0.02;
-  vec3 sky = skyColor(normalize(R));
+  vec3 sky = skyColor(normalize(R)) * vec3(0.82, 0.93, 1.12) * 1.05; // blue-shifted sky reflection
 
-  float fres = 0.025 + 0.975 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+  float fres = 0.03 + 0.85 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
 
-  // water body colour by depth
-  vec3 shallow = vec3(0.07, 0.31, 0.36);
-  vec3 deep = vec3(0.012, 0.075, 0.13);
+  // ---- water body colour: clear blue tint, absorption by depth
+  vec3 shallow = vec3(0.050, 0.270, 0.490);
+  vec3 deep    = vec3(0.006, 0.060, 0.165);
   vec3 body = mix(shallow, deep, sqrt(clamp(depth / 10.0, 0.0, 1.0)));
 
-  // foam
+  // foam + shoreline whiteness
   float foam = texture2D(uFoam, vUvw).r;
-  body = mix(body, vec3(0.88, 0.92, 0.94), clamp(foam, 0.0, 1.0) * 0.85);
+  float shore = smoothstep(0.30, 0.03, depth) * 0.30;
+  body = mix(body, vec3(0.90, 0.94, 0.97), clamp(foam, 0.0, 1.0) * 0.85 + shore);
 
-  // sun specular
+  // sun specular: tight glitter + broad gloss
   vec3 H = normalize(uSunDir + V);
-  float spec = pow(max(dot(N, H), 0.0), 160.0) * 2.4;
+  float spec = pow(max(dot(N, H), 0.0), 220.0) * 3.2 + pow(max(dot(N, H), 0.0), 24.0) * 0.16;
 
   vec3 col = mix(body, sky, clamp(fres, 0.0, 1.0)) + uSunColor * spec * (1.0 - 0.6 * foam);
 
-  // optional flow-speed overlay
-  float speed = length(st.yz);
-  if (uShowSpeed > 0.5) {
+  // ---- analysis layers (downstream of the dam only — the reservoir is storage)
+  float wx = vUvw.x * uDomain.x;
+  if (uLayerMode > 0.5 && wx > 114.0) {
+    if (uLayerMode < 1.5) {
+      col = depthRamp(depth / 8.0);
+    } else if (uLayerMode < 2.5) {
+      col = jet(speed / 8.0);
+    } else {
+      float arr = texture2D(uArrTex, vUvw).r;
+      if (arr > 0.5) col = arrivalRamp(arr / 14400.0); // 0..240 min, unflooded stays natural
+    }
+  } else if (uShowSpeed > 0.5) {
     col = mix(col, jet(speed / 9.0), 0.8);
   }
 
   // shoreline transparency ramp
   float alpha = clamp(0.62 + fres * 0.38 + foam * 0.25, 0.0, 0.97);
   alpha *= smoothstep(0.02, 0.22, depth);
+  if (uLayerMode > 0.5) alpha = clamp(0.55 + 0.4 * smoothstep(0.02, 0.15, depth), 0.0, 0.92);
   alpha = clamp(alpha, 0.0, 0.97);
 
   // atmospheric fog
@@ -439,8 +521,6 @@ void main() {
   col = mix(col, uFogColor, fogF);
 
   gl_FragColor = vec4(col, alpha);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
 }
 `;
 
@@ -501,7 +581,5 @@ void main() {
   float a = smoothstep(0.5, 0.08, r) * vFade;
   if (a < 0.01) discard;
   gl_FragColor = vec4(vec3(0.93, 0.96, 1.0), a);
-  #include <tonemapping_fragment>
-  #include <colorspace_fragment>
 }
 `;

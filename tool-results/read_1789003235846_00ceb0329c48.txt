@@ -1,0 +1,936 @@
+     1→     1→// Dam-break hydrodynamics engine: Three.js scene + GPU shallow-water solver.
+     2→     2→import * as THREE from 'three';
+     3→     3→import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+     4→     4→import { Sky } from 'three/examples/jsm/objects/Sky.js';
+     5→     5→import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
+     6→     6→
+     7→     7→import {
+     8→     8→  LX, LZ, NX, NZ, DX, DZ,
+     9→     9→  DAM_X, CREST, RES_LEVEL,
+    10→    10→  SPILL_CREST_CLOSED, GATE_OPEN_ELEV,
+    11→    11→  BREACH_BOTTOM,
+    12→    12→  bedAt, fbm, buildStructBase, applyStructState, buildInitState, terrainColor,
+    13→    13→} from './terrain';
+    14→    14→import {
+    15→    15→  QUAD_VERT, ETA_FRAG, VEL_FRAG, FOAM_FRAG, SPRAY_FRAG, COPY_FRAG, DOWN_FRAG,
+    16→    16→  WATER_VERT, WATER_FRAG, SPRAY_POINTS_VERT, SPRAY_POINTS_FRAG, TEXEL, CELL,
+    17→    17→} from './glsl';
+    18→    18→import {
+    19→    19→  FlowField, buildDam, buildHouses, buildTrees, buildBarrels, buildDebris,
+    20→    20→  RiverAudio, type DamProps, type House, type Tree, type Barrel, type Chunk,
+    21→    21→} from './props';
+    22→    22→
+    23→    23→export type Phase = 'ready' | 'breach' | 'gates' | 'flood';
+    24→    24→export type CamPreset = 'overview' | 'dam' | 'valley' | 'top';
+    25→    25→
+    26→    26→export interface DamStats {
+    27→    27→  t: number;
+    28→    28→  q: number;
+    29→    29→  qPeak: number;
+    30→    30→  level: number;
+    31→    31→  vmax: number;
+    32→    32→  froude: number;
+    33→    33→  fps: number;
+    34→    34→  phase: Phase;
+    35→    35→  overtopping: boolean;
+    36→    36→}
+    37→    37→
+    38→    38→const DT_MAX = 0.008;
+    39→    39→const MANNING = 0.028;
+    40→    40→const SPRAY_N = 128;
+    41→    41→const DOWN_W = 48;
+    42→    42→const DOWN_H = 28;
+    43→    43→
+    44→    44→const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
+    45→    45→const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+    46→    46→
+    47→    47→export class DamSim {
+    48→    48→  // ---- three core
+    49→    49→  private renderer: THREE.WebGLRenderer;
+    50→    50→  private scene = new THREE.Scene();
+    51→    51→  private camera: THREE.PerspectiveCamera;
+    52→    52→  private controls: OrbitControls;
+    53→    53→  private container: HTMLElement;
+    54→    54→  private lastFrameTime = performance.now();
+    55→    55→  private rafId = 0;
+    56→    56→  private ro: ResizeObserver;
+    57→    57→
+    58→    58→  // ---- GPU sim resources
+    59→    59→  private rtStateA!: THREE.WebGLRenderTarget;
+    60→    60→  private rtStateB!: THREE.WebGLRenderTarget;
+    61→    61→  private rtEta!: THREE.WebGLRenderTarget;
+    62→    62→  private rtFoamA!: THREE.WebGLRenderTarget;
+    63→    63→  private rtFoamB!: THREE.WebGLRenderTarget;
+    64→    64→  private rtSprayA!: THREE.WebGLRenderTarget;
+    65→    65→  private rtSprayB!: THREE.WebGLRenderTarget;
+    66→    66→  private rtDown!: THREE.WebGLRenderTarget;
+    67→    67→  private texBed!: THREE.DataTexture;
+    68→    68→  private texStruct!: THREE.DataTexture;
+    69→    69→  private texInit!: THREE.DataTexture;
+    70→    70→  private texSprayInit!: THREE.DataTexture;
+    71→    71→  private texBlack!: THREE.DataTexture;
+    72→    72→
+    73→    73→  private etaPass!: FullScreenQuad;
+    74→    74→  private velPass!: FullScreenQuad;
+    75→    75→  private foamPass!: FullScreenQuad;
+    76→    76→  private sprayPass!: FullScreenQuad;
+    77→    77→  private copyPass!: FullScreenQuad;
+    78→    78→  private downPass!: FullScreenQuad;
+    79→    79→
+    80→    80→  private structArr: Float32Array;
+    81→    81→  private structBase: Float32Array;
+    82→    82→  private bedGrid: Float32Array;
+    83→    83→
+    84→    84→  // ---- scene objects
+    85→    85→  private waterMat!: THREE.ShaderMaterial;
+    86→    86→  private sprayMat!: THREE.ShaderMaterial;
+    87→    87→  private dam!: DamProps;
+    88→    88→  private houses: House[] = [];
+    89→    89→  private trees: Tree[] = [];
+    90→    90→  private barrels: Barrel[] = [];
+    91→    91→  private chunks: Chunk[] = [];
+    92→    92→  private audio = new RiverAudio();
+    93→    93→  private sunDir = new THREE.Vector3(-0.42, 0.62, 0.28).normalize();
+    94→    94→
+    95→    95→  // ---- state
+    96→    96→  private curState: THREE.WebGLRenderTarget;
+    97→    97→  private nextState: THREE.WebGLRenderTarget;
+    98→    98→  private curFoam!: THREE.WebGLRenderTarget;
+    99→    99→  private nextFoam!: THREE.WebGLRenderTarget;
+   100→   100→  private curSpray!: THREE.WebGLRenderTarget;
+   101→   101→  private nextSpray!: THREE.WebGLRenderTarget;
+   102→   102→
+   103→   103→  simTime = 0;
+   104→   104→  private phase: Phase = 'ready';
+   105→   105→  private breachT: number | null = null;
+   106→   106→  private breachElev: number | null = null;
+   107→   107→  private gateT: number | null = null;
+   108→   108→  private gateElev: number | null = null;
+   109→   109→  private overtopping = false;
+   110→   110→  private overtopT = 0;
+   111→   111→  private structDirty = true;
+   112→   112→  private shake = 0;
+   113→   113→  private paused = false;
+   114→   114→
+   115→   115→  // params
+   116→   116→  private timeScale = 1;
+   117→   117→  private prevTimeScale = 1;
+   118→   118→  private gravity = 9.81;
+   119→   119→  private inflowQ = 8;
+   120→   120→  private breachRate = 1;
+   121→   121→  private foamOn = true;
+   122→   122→  private sprayOn = true;
+   123→   123→  private showSpeed = false;
+   124→   124→  private cinematic = false;
+   125→   125→  private cinAngle = 0;
+   126→   126→
+   127→   127→  // stats
+   128→   128→  private field = new FlowField();
+   129→   129→  private readBuf = new Float32Array(DOWN_W * DOWN_H * 4);
+   130→   130→  private qPeak = 0;
+   131→   131→  private frame = 0;
+   132→   132→  private fpsEma = 60;
+   133→   133→  private stripCells = 1;
+   134→   134→  private srcRate = 0;
+   135→   135→  private sample = { eta: 0, u: 0, v: 0 };
+   136→   136→
+   137→   137→  // camera tween
+   138→   138→  private tweenT = 1;
+   139→   139→  private tweenFrom = new THREE.Vector3();
+   140→   140→  private tweenFromT = new THREE.Vector3();
+   141→   141→  private tweenTo = new THREE.Vector3();
+   142→   142→  private tweenToT = new THREE.Vector3();
+   143→   143→
+   144→   144→  onStats: ((s: DamStats) => void) | null = null;
+   145→   145→  onError: ((msg: string) => void) | null = null;
+   146→   146→
+   147→   147→  constructor(container: HTMLElement) {
+   148→   148→    this.container = container;
+   149→   149→    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+   150→   150→    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+   151→   151→    this.renderer.setSize(container.clientWidth, container.clientHeight);
+   152→   152→    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+   153→   153→    this.renderer.toneMappingExposure = 0.8;
+   154→   154→    this.renderer.shadowMap.enabled = true;
+   155→   155→    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+   156→   156→    container.appendChild(this.renderer.domElement);
+   157→   157→
+   158→   158→    this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.5, 6000);
+   159→   159→    this.camera.position.set(150, 58, 132);
+   160→   160→
+   161→   161→    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+   162→   162→    this.controls.target.set(100, 12, 0);
+   163→   163→    this.controls.enableDamping = true;
+   164→   164→    this.controls.dampingFactor = 0.08;
+   165→   165→    this.controls.maxPolarAngle = 1.54;
+   166→   166→    this.controls.minDistance = 12;
+   167→   167→    this.controls.maxDistance = 500;
+   168→   168→
+   169→   169→    this.scene.fog = new THREE.Fog(0xc6d8ea, 380, 1600);
+   170→   170→
+   171→   171→    // sky + environment
+   172→   172→    const sky = new Sky();
+   173→   173→    sky.scale.setScalar(12000);
+   174→   174→    const su = sky.material.uniforms;
+   175→   175→    su.turbidity.value = 6;
+   176→   176→    su.rayleigh.value = 2.2;
+   177→   177→    su.mieCoefficient.value = 0.006;
+   178→   178→    su.mieDirectionalG.value = 0.85;
+   179→   179→    su.sunPosition.value.copy(this.sunDir);
+   180→   180→    const skyScene = new THREE.Scene();
+   181→   181→    skyScene.add(sky);
+   182→   182→    const pmrem = new THREE.PMREMGenerator(this.renderer);
+   183→   183→    this.scene.environment = pmrem.fromScene(skyScene).texture;
+   184→   184→    this.scene.environmentIntensity = 0.22;
+   185→   185→    pmrem.dispose();
+   186→   186→    this.scene.add(sky);
+   187→   187→
+   188→   188→    // lights
+   189→   189→    const sun = new THREE.DirectionalLight(0xffe8c8, 2.0);
+   190→   190→    sun.position.copy(this.sunDir).multiplyScalar(420);
+   191→   191→    sun.castShadow = true;
+   192→   192→    sun.shadow.mapSize.set(2048, 2048);
+   193→   193→    const sc = sun.shadow.camera;
+   194→   194→    sc.left = -95; sc.right = 95; sc.top = 95; sc.bottom = -95; sc.near = 100; sc.far = 950;
+   195→   195→    sun.shadow.bias = -0.0004;
+   196→   196→    sun.shadow.normalBias = 0.6;
+   197→   197→    sun.target.position.set(105, 10, 0);
+   198→   198→    this.scene.add(sun, sun.target);
+   199→   199→    this.scene.add(new THREE.HemisphereLight(0xbfd8ef, 0x6b6354, 0.42));
+   200→   200→
+   201→   201→    this.buildTerrainMesh();
+   202→   202→    this.buildGpuResources();
+   203→   203→    this.buildWater();
+   204→   204→    this.buildProps();
+   205→   205→
+   206→   206→    this.curState = this.rtStateA;
+   207→   207→    this.nextState = this.rtStateB;
+   208→   208→    this.curFoam = this.rtFoamA;
+   209→   209→    this.nextFoam = this.rtFoamB;
+   210→   210→    this.curSpray = this.rtSprayA;
+   211→   211→    this.nextSpray = this.rtSprayB;
+   212→   212→    this.resetSim();
+   213→   213→
+   214→   214→    this.ro = new ResizeObserver(() => this.onResize());
+   215→   215→    this.ro.observe(container);
+   216→   216→
+   217→   217→    (window as unknown as Record<string, unknown>).__damSim = this;
+   218→   218→    this.lastFrameTime = performance.now();
+   219→   219→    this.tick();
+   220→   220→  }
+   221→   221→
+   222→   222→  // ================================================================ terrain mesh
+   223→   223→  private buildTerrainMesh(): void {
+   224→   224→    // bed grid on cell centers
+   225→   225→    this.bedGrid = new Float32Array(NX * NZ);
+   226→   226→    for (let j = 0; j < NZ; j++)
+   227→   227→      for (let i = 0; i < NX; i++)
+   228→   228→        this.bedGrid[j * NX + i] = bedAt((i + 0.5) * DX, (j + 0.5) * DZ - LZ / 2);
+   229→   229→
+   230→   230→    const geo = new THREE.PlaneGeometry(LX, LZ, NX - 1, NZ - 1);
+   231→   231→    geo.rotateX(-Math.PI / 2);
+   232→   232→    geo.translate(LX / 2, 0, 0);
+   233→   233→    const pos = geo.attributes.position as THREE.BufferAttribute;
+   234→   234→    const colors = new Float32Array(pos.count * 3);
+   235→   235→    const col = new THREE.Color();
+   236→   236→    const tc = { r: 0, g: 0, b: 0 };
+   237→   237→    for (let i = 0; i < pos.count; i++) {
+   238→   238→      const x = pos.getX(i);
+   239→   239→      const z = pos.getZ(i);
+   240→   240→      const y = this.sampleBed(x, z);
+   241→   241→      pos.setY(i, y);
+   242→   242→      const e = 1.2;
+   243→   243→      const sx = (this.sampleBed(x + e, z) - this.sampleBed(x - e, z)) / (2 * e);
+   244→   244→      const sz = (this.sampleBed(x, z + e) - this.sampleBed(x, z - e)) / (2 * e);
+   245→   245→      const slope = Math.sqrt(sx * sx + sz * sz);
+   246→   246→      terrainColor(x, z, y, slope, tc);
+   247→   247→      col.setRGB(tc.r, tc.g, tc.b, THREE.SRGBColorSpace);
+   248→   248→      colors[i * 3] = col.r;
+   249→   249→      colors[i * 3 + 1] = col.g;
+   250→   250→      colors[i * 3 + 2] = col.b;
+   251→   251→    }
+   252→   252→    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+   253→   253→    geo.computeVertexNormals();
+   254→   254→    const mesh = new THREE.Mesh(
+   255→   255→      geo,
+   256→   256→      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, envMapIntensity: 0.18 }),
+   257→   257→    );
+   258→   258→    mesh.receiveShadow = true;
+   259→   259→    this.scene.add(mesh);
+   260→   260→
+   261→   261→    // surround plane so the domain doesn't float in the void
+   262→   262→    const surround = new THREE.Mesh(
+   263→   263→      new THREE.PlaneGeometry(3000, 3000),
+   264→   264→      new THREE.MeshStandardMaterial({ color: 0xa8ad97, roughness: 1, metalness: 0, envMapIntensity: 0.1 }),
+   265→   265→    );
+   266→   266→    surround.rotation.x = -Math.PI / 2;
+   267→   267→    surround.position.set(LX / 2, 1.2, 0);
+   268→   268→    this.scene.add(surround);
+   269→   269→  }
+   270→   270→
+   271→   271→  private sampleBed(x: number, z: number): number {
+   272→   272→    const fu = clamp((x / DX) - 0.5, 0, NX - 1.001);
+   273→   273→    const fv = clamp((z + LZ / 2) / DZ - 0.5, 0, NZ - 1.001);
+   274→   274→    const i = Math.floor(fu), j = Math.floor(fv);
+   275→   275→    const fx = fu - i, fy = fv - j;
+   276→   276→    const i1 = Math.min(i + 1, NX - 1), j1 = Math.min(j + 1, NZ - 1);
+   277→   277→    const g = this.bedGrid;
+   278→   278→    const a = g[j * NX + i] + (g[j * NX + i1] - g[j * NX + i]) * fx;
+   279→   279→    const b = g[j1 * NX + i] + (g[j1 * NX + i1] - g[j1 * NX + i]) * fx;
+   280→   280→    return a + (b - a) * fy;
+   281→   281→  }
+   282→   282→
+   283→   283→  // ============================================================== GPU resources
+   284→   284→  private mkRT(w: number, h: number, filter: THREE.MagnificationTextureFilter): THREE.WebGLRenderTarget {
+   285→   285→    return new THREE.WebGLRenderTarget(w, h, {
+   286→   286→      minFilter: filter,
+   287→   287→      magFilter: filter,
+   288→   288→      format: THREE.RGBAFormat,
+   289→   289→      type: THREE.FloatType,
+   290→   290→      depthBuffer: false,
+   291→   291→      stencilBuffer: false,
+   292→   292→    });
+   293→   293→  }
+   294→   294→
+   295→   295→  private buildGpuResources(): void {
+   296→   296→    const gl = this.renderer.getContext();
+   297→   297→    gl.getExtension('EXT_color_buffer_float');
+   298→   298→    const floatLinear = !!gl.getExtension('OES_texture_float_linear');
+   299→   299→    const foamFilter = floatLinear ? THREE.LinearFilter : THREE.NearestFilter;
+   300→   300→
+   301→   301→    this.rtStateA = this.mkRT(NX, NZ, THREE.NearestFilter);
+   302→   302→    this.rtStateB = this.mkRT(NX, NZ, THREE.NearestFilter);
+   303→   303→    this.rtEta = this.mkRT(NX, NZ, THREE.NearestFilter);
+   304→   304→    this.rtFoamA = this.mkRT(NX, NZ, foamFilter);
+   305→   305→    this.rtFoamB = this.mkRT(NX, NZ, foamFilter);
+   306→   306→    this.rtSprayA = this.mkRT(SPRAY_N, SPRAY_N, THREE.NearestFilter);
+   307→   307→    this.rtSprayB = this.mkRT(SPRAY_N, SPRAY_N, THREE.NearestFilter);
+   308→   308→    this.rtDown = this.mkRT(DOWN_W, DOWN_H, THREE.NearestFilter);
+   309→   309→
+   310→   310→    this.structBase = buildStructBase();
+   311→   311→    this.structArr = new Float32Array(this.structBase);
+   312→   312→    this.texBed = new THREE.DataTexture(this.bedGrid, NX, NZ, THREE.RedFormat, THREE.FloatType);
+   313→   313→    this.texBed.minFilter = this.texBed.magFilter = THREE.NearestFilter;
+   314→   314→    this.texBed.needsUpdate = true;
+   315→   315→    this.texStruct = new THREE.DataTexture(this.structArr, NX, NZ, THREE.RedFormat, THREE.FloatType);
+   316→   316→    this.texStruct.minFilter = this.texStruct.magFilter = THREE.NearestFilter;
+   317→   317→    this.texStruct.needsUpdate = true;
+   318→   318→    this.texInit = new THREE.DataTexture(buildInitState(), NX, NZ, THREE.RGBAFormat, THREE.FloatType);
+   319→   319→    this.texInit.minFilter = this.texInit.magFilter = THREE.NearestFilter;
+   320→   320→    this.texInit.needsUpdate = true;
+   321→   321→
+   322→   322→    const sprayInit = new Float32Array(SPRAY_N * SPRAY_N * 4);
+   323→   323→    for (let i = 0; i < sprayInit.length; i += 4) {
+   324→   324→      sprayInit[i] = 0; sprayInit[i + 1] = 0; sprayInit[i + 2] = 1; sprayInit[i + 3] = 1;
+   325→   325→    }
+   326→   326→    this.texSprayInit = new THREE.DataTexture(sprayInit, SPRAY_N, SPRAY_N, THREE.RGBAFormat, THREE.FloatType);
+   327→   327→    this.texSprayInit.needsUpdate = true;
+   328→   328→    this.texBlack = new THREE.DataTexture(new Float32Array([0, 0, 0, 1]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+   329→   329→    this.texBlack.needsUpdate = true;
+   330→   330→
+   331→   331→    const mat = (frag: string, uniforms: Record<string, THREE.IUniform>) =>
+   332→   332→      new THREE.ShaderMaterial({ vertexShader: QUAD_VERT, fragmentShader: frag, uniforms, depthTest: false, depthWrite: false });
+   333→   333→
+   334→   334→    const common = {
+   335→   335→      uState: { value: null },
+   336→   336→      uBed: { value: this.texBed },
+   337→   337→      uStruct: { value: this.texStruct },
+   338→   338→      uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   339→   339→      uCell: { value: new THREE.Vector2(CELL[0], CELL[1]) },
+   340→   340→      uG: { value: this.gravity },
+   341→   341→    };
+   342→   342→
+   343→   343→    this.etaPass = new FullScreenQuad(mat(ETA_FRAG, {
+   344→   344→      ...common,
+   345→   345→      uDt: { value: 0 },
+   346→   346→      uSrcRate: { value: 0 },
+   347→   347→      uSrcBox: { value: new THREE.Vector4(2 / LX, 8 / LX, (-34 + LZ / 2) / LZ, (34 + LZ / 2) / LZ) },
+   348→   348→    }));
+   349→   349→    this.velPass = new FullScreenQuad(mat(VEL_FRAG, {
+   350→   350→      ...common,
+   351→   351→      uEtaNew: { value: null },
+   352→   352→      uDt: { value: 0 },
+   353→   353→      uManning: { value: MANNING },
+   354→   354→    }));
+   355→   355→    this.foamPass = new FullScreenQuad(mat(FOAM_FRAG, {
+   356→   356→      ...common,
+   357→   357→      uFoam: { value: null },
+   358→   358→      uDt: { value: 0 },
+   359→   359→    }));
+   360→   360→    this.sprayPass = new FullScreenQuad(mat(SPRAY_FRAG, {
+   361→   361→      uSpray: { value: null },
+   362→   362→      uState: { value: null },
+   363→   363→      uBed: { value: this.texBed },
+   364→   364→      uStruct: { value: this.texStruct },
+   365→   365→      uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   366→   366→      uDt: { value: 0 },
+   367→   367→      uTime: { value: 0 },
+   368→   368→      uSpawnSpeed: { value: 3.2 },
+   369→   369→      uDomain: { value: new THREE.Vector2(LX, LZ) },
+   370→   370→    }));
+   371→   371→    this.copyPass = new FullScreenQuad(mat(COPY_FRAG, { uInit: { value: null } }));
+   372→   372→    this.downPass = new FullScreenQuad(mat(DOWN_FRAG, { uState: { value: null } }));
+   373→   373→
+   374→   374→    // count inflow strip cells (x ∈ [2,8], bed < 15)
+   375→   375→    let n = 0;
+   376→   376→    for (let j = 0; j < NZ; j++)
+   377→   377→      for (let i = Math.ceil(2 / DX); i < Math.floor(8 / DX); i++)
+   378→   378→        if (this.bedGrid[j * NX + i] < 15) n++;
+   379→   379→    this.stripCells = Math.max(n, 1);
+   380→   380→  }
+   381→   381→
+   382→   382→  private renderTo(q: FullScreenQuad, target: THREE.WebGLRenderTarget | null): void {
+   383→   383→    this.renderer.setRenderTarget(target);
+   384→   384→    q.render(this.renderer);
+   385→   385→    this.renderer.setRenderTarget(null);
+   386→   386→  }
+   387→   387→
+   388→   388→  // =================================================================== water
+   389→   389→  private buildWater(): void {
+   390→   390→    const geo = new THREE.PlaneGeometry(LX, LZ, 320, 192);
+   391→   391→    geo.rotateX(-Math.PI / 2);
+   392→   392→    geo.translate(LX / 2, 0, 0);
+   393→   393→    this.waterMat = new THREE.ShaderMaterial({
+   394→   394→      vertexShader: WATER_VERT,
+   395→   395→      fragmentShader: WATER_FRAG,
+   396→   396→      transparent: true,
+   397→   397→      side: THREE.DoubleSide,
+   398→   398→      uniforms: {
+   399→   399→        uState: { value: null },
+   400→   400→        uBed: { value: this.texBed },
+   401→   401→        uStruct: { value: this.texStruct },
+   402→   402→        uFoam: { value: null },
+   403→   403→        uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   404→   404→        uCell: { value: new THREE.Vector2(CELL[0], CELL[1]) },
+   405→   405→        uDomain: { value: new THREE.Vector2(LX, LZ) },
+   406→   406→        uSunDir: { value: this.sunDir },
+   407→   407→        uSunColor: { value: new THREE.Vector3(1.0, 0.92, 0.8) },
+   408→   408→        uCamPos: { value: new THREE.Vector3() },
+   409→   409→        uShowSpeed: { value: 0 },
+   410→   410→        uTime: { value: 0 },
+   411→   411→        uFogColor: { value: new THREE.Color(0xc6d8ea) },
+   412→   412→        uFogNear: { value: 380 },
+   413→   413→        uFogFar: { value: 1600 },
+   414→   414→      },
+   415→   415→    });
+   416→   416→    const mesh = new THREE.Mesh(geo, this.waterMat);
+   417→   417→    mesh.renderOrder = 10;
+   418→   418→    mesh.frustumCulled = false;
+   419→   419→    this.scene.add(mesh);
+   420→   420→
+   421→   421→    // spray points
+   422→   422→    const pg = new THREE.BufferGeometry();
+   423→   423→    const pp = new Float32Array(SPRAY_N * SPRAY_N * 3);
+   424→   424→    for (let j = 0; j < SPRAY_N; j++)
+   425→   425→      for (let i = 0; i < SPRAY_N; i++) {
+   426→   426→        const k = (j * SPRAY_N + i) * 3;
+   427→   427→        pp[k] = (i + 0.5) / SPRAY_N;
+   428→   428→        pp[k + 1] = (j + 0.5) / SPRAY_N;
+   429→   429→        pp[k + 2] = 0;
+   430→   430→      }
+   431→   431→    pg.setAttribute('position', new THREE.BufferAttribute(pp, 3));
+   432→   432→    this.sprayMat = new THREE.ShaderMaterial({
+   433→   433→      vertexShader: SPRAY_POINTS_VERT,
+   434→   434→      fragmentShader: SPRAY_POINTS_FRAG,
+   435→   435→      transparent: true,
+   436→   436→      depthWrite: false,
+   437→   437→      uniforms: {
+   438→   438→        uSpray: { value: null },
+   439→   439→        uState: { value: null },
+   440→   440→        uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   441→   441→        uDomain: { value: new THREE.Vector2(LX, LZ) },
+   442→   442→        uPixelRatio: { value: this.renderer.getPixelRatio() },
+   443→   443→      },
+   444→   444→    });
+   445→   445→    const points = new THREE.Points(pg, this.sprayMat);
+   446→   446→    points.renderOrder = 11;
+   447→   447→    points.frustumCulled = false;
+   448→   448→    this.scene.add(points);
+   449→   449→  }
+   450→   450→
+   451→   451→  // ==================================================================== props
+   452→   452→  private buildProps(): void {
+   453→   453→    this.dam = buildDam();
+   454→   454→    this.scene.add(this.dam.group);
+   455→   455→    const h = buildHouses();
+   456→   456→    this.houses = h.houses;
+   457→   457→    this.scene.add(h.group);
+   458→   458→    const t = buildTrees();
+   459→   459→    this.trees = t.trees;
+   460→   460→    this.scene.add(t.group);
+   461→   461→    const b = buildBarrels();
+   462→   462→    this.barrels = b.barrels;
+   463→   463→    this.scene.add(b.group);
+   464→   464→    const d = buildDebris();
+   465→   465→    this.chunks = d.chunks;
+   466→   466→    this.scene.add(d.group);
+   467→   467→  }
+   468→   468→
+   469→   469→  // ================================================================ sim stepping
+   470→   470→  private swapState(): void {
+   471→   471→    const t = this.curState;
+   472→   472→    this.curState = this.nextState;
+   473→   473→    this.nextState = t;
+   474→   474→  }
+   475→   475→
+   476→   476→  private simSubstep(dt: number): void {
+   477→   477→    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+   478→   478→    eu.uState.value = this.curState.texture;
+   479→   479→    eu.uDt.value = dt;
+   480→   480→    eu.uG.value = this.gravity;
+   481→   481→    eu.uSrcRate.value = this.srcRate;
+   482→   482→    this.renderTo(this.etaPass, this.rtEta);
+   483→   483→
+   484→   484→    const vu = (this.velPass.material as THREE.ShaderMaterial).uniforms;
+   485→   485→    vu.uState.value = this.curState.texture;
+   486→   486→    vu.uEtaNew.value = this.rtEta.texture;
+   487→   487→    vu.uDt.value = dt;
+   488→   488→    vu.uG.value = this.gravity;
+   489→   489→    this.renderTo(this.velPass, this.nextState);
+   490→   490→    this.swapState();
+   491→   491→
+   492→   492→    if (this.foamOn) {
+   493→   493→      const fu = (this.foamPass.material as THREE.ShaderMaterial).uniforms;
+   494→   494→      fu.uState.value = this.curState.texture;
+   495→   495→      fu.uFoam.value = this.curFoam.texture;
+   496→   496→      fu.uDt.value = dt;
+   497→   497→      fu.uG.value = this.gravity;
+   498→   498→      this.renderTo(this.foamPass, this.nextFoam);
+   499→   499→      const t = this.curFoam;
+   500→   500→      this.curFoam = this.nextFoam;
+   501→   501→      this.nextFoam = t;
+   502→   502→    }
+   503→   503→
+   504→   504→    if (this.sprayOn) {
+   505→   505→      const su = (this.sprayPass.material as THREE.ShaderMaterial).uniforms;
+   506→   506→      su.uSpray.value = this.curSpray.texture;
+   507→   507→      su.uState.value = this.curState.texture;
+   508→   508→      su.uDt.value = dt;
+   509→   509→      su.uTime.value = this.simTime;
+   510→   510→      this.renderTo(this.sprayPass, this.nextSpray);
+   511→   511→      const t = this.curSpray;
+   512→   512→      this.curSpray = this.nextSpray;
+   513→   513→      this.nextSpray = t;
+   514→   514→    }
+   515→   515→  }
+   516→   516→
+   517→   517→  private resetSim(): void {
+   518→   518→    const cu = (this.copyPass.material as THREE.ShaderMaterial).uniforms;
+   519→   519→    cu.uInit.value = this.texInit;
+   520→   520→    this.renderTo(this.copyPass, this.rtStateA);
+   521→   521→    this.renderTo(this.copyPass, this.rtStateB);
+   522→   522→    this.renderTo(this.copyPass, this.rtEta);
+   523→   523→    cu.uInit.value = this.texBlack;
+   524→   524→    this.renderTo(this.copyPass, this.rtFoamA);
+   525→   525→    this.renderTo(this.copyPass, this.rtFoamB);
+   526→   526→    cu.uInit.value = this.texSprayInit;
+   527→   527→    this.renderTo(this.copyPass, this.rtSprayA);
+   528→   528→    this.renderTo(this.copyPass, this.rtSprayB);
+   529→   529→    this.curState = this.rtStateA;
+   530→   530→    this.nextState = this.rtStateB;
+   531→   531→    this.curFoam = this.rtFoamA;
+   532→   532→    this.nextFoam = this.rtFoamB;
+   533→   533→    this.curSpray = this.rtSprayA;
+   534→   534→    this.nextSpray = this.rtSprayB;
+   535→   535→    this.simTime = 0;
+   536→   536→    this.qPeak = 0;
+   537→   537→    this.applyStruct(null, null);
+   538→   538→  }
+   539→   539→
+   540→   540→  // ================================================================ scenarios
+   541→   541→  private applyStruct(breach: number | null, gate: number | null): void {
+   542→   542→    applyStructState(this.structArr, this.structBase, breach, gate);
+   543→   543→    this.texStruct.needsUpdate = true;
+   544→   544→  }
+   545→   545→
+   546→   546→  breakDam(): void {
+   547→   547→    if (this.breachT !== null) return;
+   548→   548→    this.phase = 'breach';
+   549→   549→    this.breachT = 0;
+   550→   550→    this.shake = 1;
+   551→   551→    this.audio.burst(1);
+   552→   552→    this.spawnDebris();
+   553→   553→  }
+   554→   554→
+   555→   555→  openGates(): void {
+   556→   556→    if (this.gateT !== null) return;
+   557→   557→    this.phase = 'gates';
+   558→   558→    this.gateT = 0;
+   559→   559→    this.audio.burst(0.35);
+   560→   560→  }
+   561→   561→
+   562→   562→  toggleOvertopping(): boolean {
+   563→   563→    this.overtopping = !this.overtopping;
+   564→   564→    if (this.overtopping) {
+   565→   565→      this.overtopT = 0;
+   566→   566→      this.phase = 'flood';
+   567→   567→    } else {
+   568→   568→      this.phase = 'ready';
+   569→   569→    }
+   570→   570→    return this.overtopping;
+   571→   571→  }
+   572→   572→
+   573→   573→  reset(): void {
+   574→   574→    this.phase = 'ready';
+   575→   575→    this.breachT = null;
+   576→   576→    this.breachElev = null;
+   577→   577→    this.gateT = null;
+   578→   578→    this.gateElev = null;
+   579→   579→    this.overtopping = false;
+   580→   580→    this.overtopT = 0;
+   581→   581→    this.shake = 0;
+   582→   582→    this.dam.breachGroup.position.y = 0;
+   583→   583→    this.dam.breachGroup.rotation.set(0, 0, 0);
+   584→   584→    this.dam.gate.position.y = 18.85;
+   585→   585→    for (const c of this.chunks) {
+   586→   586→      c.active = false;
+   587→   587→      c.mesh.visible = false;
+   588→   588→    }
+   589→   589→    for (const h of this.houses) {
+   590→   590→      h.prog = 0;
+   591→   591→      h.group.rotation.x = 0;
+   592→   592→      h.group.rotation.z = 0;
+   593→   593→      h.group.position.y = h.ground;
+   594→   594→    }
+   595→   595→    for (const t of this.trees) {
+   596→   596→      t.prog = 0;
+   597→   597→      t.group.rotation.x = 0;
+   598→   598→      t.group.rotation.z = 0;
+   599→   599→      t.group.position.y = t.ground;
+   600→   600→    }
+   601→   601→    for (const b of this.barrels) {
+   602→   602→      b.pos.set(b.mesh.position.x, 21.4, b.mesh.position.z);
+   603→   603→      b.vel.set(0, 0, 0);
+   604→   604→    }
+   605→   605→    this.resetSim();
+   606→   606→  }
+   607→   607→
+   608→   608→  private spawnDebris(): void {
+   609→   609→    for (const c of this.chunks) {
+   610→   610→      const r = Math.random();
+   611→   611→      c.mesh.visible = true;
+   612→   612→      c.active = true;
+   613→   613→      c.mesh.position.set(DAM_X + 1 + Math.random() * 2.5, CREST + 0.5 + Math.random(), -13 + r * 22);
+   614→   614→      c.vel.set(4 + Math.random() * 7, 3 + Math.random() * 5, (Math.random() - 0.5) * 9);
+   615→   615→      c.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+   616→   616→    }
+   617→   617→  }
+   618→   618→
+   619→   619→  // ================================================================ main loop
+   620→   620→  private tick = (): void => {
+   621→   621→    this.rafId = requestAnimationFrame(this.tick);
+   622→   622→    const now = performance.now();
+   623→   623→    const dtReal = Math.min((now - this.lastFrameTime) / 1000, 0.05);
+   624→   624→    this.lastFrameTime = now;
+   625→   625→    this.fpsEma = this.fpsEma * 0.95 + (1 / Math.max(dtReal, 1e-4)) * 0.05;
+   626→   626→    const dtSim = this.paused ? 0 : dtReal * this.timeScale;
+   627→   627→
+   628→   628→    if (dtSim > 0) {
+   629→   629→      // scenario animation timers
+   630→   630→      if (this.breachT !== null) {
+   631→   631→        this.breachT += dtSim;
+   632→   632→        const tau = 2.6 / this.breachRate;
+   633→   633→        const p = 1 - Math.exp(-Math.pow(this.breachT / tau, 1.7));
+   634→   634→        this.breachElev = CREST + (BREACH_BOTTOM - CREST) * p;
+   635→   635→        this.dam.breachGroup.position.y = this.breachElev - CREST;
+   636→   636→        this.dam.breachGroup.rotation.z = -0.05 * p;
+   637→   637→        this.structDirty = true;
+   638→   638→        if (p > 0.995) this.breachT = null;
+   639→   639→      }
+   640→   640→      if (this.gateT !== null && this.gateT < 1) {
+   641→   641→        this.gateT = Math.min(1, this.gateT + dtSim / 2.5);
+   642→   642→        const e = easeInOut(this.gateT);
+   643→   643→        this.gateElev = SPILL_CREST_CLOSED + (GATE_OPEN_ELEV - SPILL_CREST_CLOSED) * e;
+   644→   644→        this.dam.gate.position.y = 18.85 + 6.9 * e;
+   645→   645→        this.structDirty = true;
+   646→   646→      }
+   647→   647→      if (this.overtopping) {
+   648→   648→        this.overtopT += dtSim;
+   649→   649→      }
+   650→   650→      const curInflow = this.overtopping
+   651→   651→        ? this.inflowQ + 272 * Math.min(this.overtopT / 18, 1)
+   652→   652→        : this.inflowQ;
+   653→   653→      this.srcRate = curInflow / (this.stripCells * DX * DZ);
+   654→   654→
+   655→   655→      if (this.structDirty) {
+   656→   656→        this.applyStruct(this.breachElev, this.gateElev);
+   657→   657→        this.structDirty = false;
+   658→   658→      }
+   659→   659→
+   660→   660→      const sub = clamp(Math.ceil(dtSim / DT_MAX), 1, 8);
+   661→   661→      const h = dtSim / sub;
+   662→   662→      for (let i = 0; i < sub; i++) this.simSubstep(h);
+   663→   663→      this.simTime += dtSim;
+   664→   664→      this.updateProps(dtSim);
+   665→   665→    }
+   666→   666→
+   667→   667→    // readback for CPU physics + stats
+   668→   668→    if (this.frame % 2 === 0) {
+   669→   669→      (this.downPass.material as THREE.ShaderMaterial).uniforms.uState.value = this.curState.texture;
+   670→   670→      this.renderTo(this.downPass, this.rtDown);
+   671→   671→      this.renderer.readRenderTargetPixels(this.rtDown, 0, 0, DOWN_W, DOWN_H, this.field.data);
+   672→   672→    }
+   673→   673→
+   674→   674→    this.updateCamera(dtReal);
+   675→   675→
+   676→   676→    // shader uniforms
+   677→   677→    this.waterMat.uniforms.uState.value = this.curState.texture;
+   678→   678→    this.waterMat.uniforms.uFoam.value = this.curFoam.texture;
+   679→   679→    this.waterMat.uniforms.uTime.value = this.simTime;
+   680→   680→    this.waterMat.uniforms.uCamPos.value.copy(this.camera.position);
+   681→   681→    this.sprayMat.uniforms.uSpray.value = this.curSpray.texture;
+   682→   682→    this.sprayMat.uniforms.uState.value = this.curState.texture;
+   683→   683→    (this.sprayPass.material as THREE.ShaderMaterial).uniforms.uState.value = this.curState.texture;
+   684→   684→
+   685→   685→    // render with camera shake
+   686→   686→    let shook: THREE.Vector3 | null = null;
+   687→   687→    if (this.shake > 0.002) {
+   688→   688→      shook = new THREE.Vector3(
+   689→   689→        (Math.random() - 0.5) * this.shake * 0.9,
+   690→   690→        (Math.random() - 0.5) * this.shake * 0.9,
+   691→   691→        (Math.random() - 0.5) * this.shake * 0.9,
+   692→   692→      );
+   693→   693→      this.camera.position.add(shook);
+   694→   694→    }
+   695→   695→    this.renderer.render(this.scene, this.camera);
+   696→   696→    if (shook) {
+   697→   697→      this.camera.position.sub(shook);
+   698→   698→      this.shake *= Math.exp(-dtReal * 1.15);
+   699→   699→    }
+   700→   700→
+   701→   701→    // stats ~10 Hz
+   702→   702→    if (this.frame % 6 === 0 && this.onStats) {
+   703→   703→      const s = this.computeStats();
+   704→   704→      this.onStats(s);
+   705→   705→      const v01 = clamp(s.vmax / 10, 0, 1);
+   706→   706→      this.audio.setIntensity(v01);
+   707→   707→    }
+   708→   708→
+   709→   709→    if (this.frame === 3) {
+   710→   710→      (window as unknown as Record<string, unknown>).__damReady = true;
+   711→   711→    }
+   712→   712→    this.frame++;
+   713→   713→  };
+   714→   714→
+   715→   715→  // ================================================================ props update
+   716→   716→  private updateProps(dt: number): void {
+   717→   717→    const f = this.field;
+   718→   718→    const s = this.sample;
+   719→   719→
+   720→   720→    for (const b of this.barrels) {
+   721→   721→      f.sample(b.pos.x, b.pos.z, s);
+   722→   722→      const bed = bedAt(b.pos.x, b.pos.z);
+   723→   723→      const dep = s.eta - bed;
+   724→   724→      if (dep > 0.4) {
+   725→   725→        const bob = Math.sin(this.simTime * 1.7 + b.pos.x) * 0.06;
+   726→   726→        b.pos.y += (s.eta + 0.15 + bob - b.pos.y) * Math.min(1, dt * 5);
+   727→   727→        b.vel.x += (s.u * 0.92 - b.vel.x) * Math.min(1, dt * 2.2);
+   728→   728→        b.vel.z += (s.v * 0.92 - b.vel.z) * Math.min(1, dt * 2.2);
+   729→   729→        b.pos.x += b.vel.x * dt;
+   730→   730→        b.pos.z += b.vel.z * dt;
+   731→   731→      } else {
+   732→   732→        b.vel.multiplyScalar(1 - Math.min(1, dt * 2.5));
+   733→   733→        b.pos.y += (bed + 0.3 - b.pos.y) * Math.min(1, dt * 4);
+   734→   734→      }
+   735→   735→      b.pos.x = clamp(b.pos.x, 1, LX - 1);
+   736→   736→      b.pos.z = clamp(b.pos.z, -LZ / 2 + 1, LZ / 2 - 1);
+   737→   737→      const spd = Math.sqrt(b.vel.x * b.vel.x + b.vel.z * b.vel.z);
+   738→   738→      b.mesh.position.copy(b.pos);
+   739→   739→      b.mesh.rotation.x = clamp(b.vel.z * 0.1, -0.5, 0.5) + Math.sin(this.simTime * 2.1 + b.pos.z) * 0.04;
+   740→   740→      b.mesh.rotation.z = clamp(-b.vel.x * 0.1, -0.5, 0.5);
+   741→   741→      b.mesh.rotation.y += (0.2 + spd * 0.3) * dt;
+   742→   742→    }
+   743→   743→
+   744→   744→    for (const h of this.houses) {
+   745→   745→      if (h.prog >= 1) continue;
+   746→   746→      f.sample(h.group.position.x, h.group.position.z, s);
+   747→   747→      const wd = s.eta - h.ground;
+   748→   748→      if (wd > 0.55) {
+   749→   749→        h.prog = Math.min(1, h.prog + dt * 0.4);
+   750→   750→        const p = h.prog;
+   751→   751→        const dir = Math.atan2(s.v, s.u);
+   752→   752→        h.group.rotation.x = -Math.cos(dir) * p * 1.35;
+   753→   753→        h.group.rotation.z = Math.sin(dir) * p * 1.35;
+   754→   754→        h.group.position.x += s.u * dt * 0.45 * p;
+   755→   755→        h.group.position.z += s.v * dt * 0.45 * p;
+   756→   756→        h.group.position.y = h.ground - p * 0.5;
+   757→   757→      }
+   758→   758→    }
+   759→   759→
+   760→   760→    for (const t of this.trees) {
+   761→   761→      if (t.prog >= 1) continue;
+   762→   762→      f.sample(t.group.position.x, t.group.position.z, s);
+   763→   763→      const wd = s.eta - t.ground;
+   764→   764→      if (wd > 0.7) {
+   765→   765→        t.prog = Math.min(1, t.prog + dt * 0.6);
+   766→   766→        const p = t.prog;
+   767→   767→        const dir = Math.atan2(s.v, s.u);
+   768→   768→        t.group.rotation.x = -Math.cos(dir) * p * 1.3;
+   769→   769→        t.group.rotation.z = Math.sin(dir) * p * 1.3;
+   770→   770→        t.group.position.x += s.u * dt * 0.25 * p;
+   771→   771→        t.group.position.z += s.v * dt * 0.25 * p;
+   772→   772→      }
+   773→   773→    }
+   774→   774→
+   775→   775→    for (const c of this.chunks) {
+   776→   776→      if (!c.active) continue;
+   777→   777→      c.vel.y -= 11 * dt;
+   778→   778→      c.mesh.position.addScaledVector(c.vel, dt);
+   779→   779→      c.mesh.rotation.x += c.vel.z * dt * 0.15;
+   780→   780→      c.mesh.rotation.z -= c.vel.x * dt * 0.15;
+   781→   781→      const ground = bedAt(c.mesh.position.x, c.mesh.position.z) + 0.25;
+   782→   782→      if (c.mesh.position.y < ground) {
+   783→   783→        c.mesh.position.y = ground;
+   784→   784→        c.vel.y *= -0.35;
+   785→   785→        c.vel.x *= 0.6;
+   786→   786→        c.vel.z *= 0.6;
+   787→   787→        if (c.vel.lengthSq() < 0.4) c.active = false;
+   788→   788→      }
+   789→   789→      if (c.mesh.position.x > LX - 1) c.active = false;
+   790→   790→    }
+   791→   791→  }
+   792→   792→
+   793→   793→  // ================================================================ stats
+   794→   794→  private computeStats(): DamStats {
+   795→   795→    const d = this.field.data;
+   796→   796→    const dzC = LZ / DOWN_H;
+   797→   797→    const gx = 37;
+   798→   798→    let q = 0;
+   799→   799→    let stage = 0;
+   800→   800→    let froude = 0;
+   801→   801→    for (let j = 0; j < DOWN_H; j++) {
+   802→   802→      const k = (j * DOWN_W + gx) * 4;
+   803→   803→      const h = Math.max(d[k + 3], 0);
+   804→   804→      const u = d[k + 1];
+   805→   805→      q += u * h * dzC;
+   806→   806→      stage = Math.max(stage, h);
+   807→   807→      if (h > 0.05) {
+   808→   808→        froude = Math.max(froude, Math.abs(u) / Math.sqrt(this.gravity * h));
+   809→   809→      }
+   810→   810→    }
+   811→   811→    let vmax = 0;
+   812→   812→    let level = 0;
+   813→   813→    for (let i = 0; i < DOWN_W * DOWN_H; i++) {
+   814→   814→      const k = i * 4;
+   815→   815→      const sp = Math.sqrt(d[k + 1] * d[k + 1] + d[k + 2] * d[k + 2]);
+   816→   816→      vmax = Math.max(vmax, sp);
+   817→   817→      if (i % DOWN_W < 18 && d[k + 3] > 0.1) level = Math.max(level, d[k]);
+   818→   818→    }
+   819→   819→    if (q > this.qPeak) this.qPeak = q;
+   820→   820→    return {
+   821→   821→      t: this.simTime,
+   822→   822→      q: Math.max(q, 0),
+   823→   823→      qPeak: this.qPeak,
+   824→   824→      level,
+   825→   825→      vmax,
+   826→   826→      froude,
+   827→   827→      fps: this.fpsEma,
+   828→   828→      phase: this.phase,
+   829→   829→      overtopping: this.overtopping,
+   830→   830→    };
+   831→   831→  }
+   832→   832→
+   833→   833→  // ================================================================ camera
+   834→   834→  private updateCamera(dt: number): void {
+   835→   835→    if (this.cinematic) {
+   836→   836→      this.cinAngle += dt * 0.05;
+   837→   837→      const R = 95;
+   838→   838→      this.camera.position.set(
+   839→   839→        105 + R * Math.cos(this.cinAngle),
+   840→   840→        42 + 10 * Math.sin(this.cinAngle * 0.7),
+   841→   841→        R * Math.sin(this.cinAngle),
+   842→   842→      );
+   843→   843→      this.camera.lookAt(105, 14, 0);
+   844→   844→      return;
+   845→   845→    }
+   846→   846→    if (this.tweenT < 1) {
+   847→   847→      this.tweenT = Math.min(1, this.tweenT + dt / 1.2);
+   848→   848→      const e = easeInOut(this.tweenT);
+   849→   849→      this.camera.position.lerpVectors(this.tweenFrom, this.tweenTo, e);
+   850→   850→      this.controls.target.lerpVectors(this.tweenFromT, this.tweenToT, e);
+   851→   851→    }
+   852→   852→    this.controls.update();
+   853→   853→  }
+   854→   854→
+   855→   855→  setCamera(preset: CamPreset): void {
+   856→   856→    const P: Record<CamPreset, [THREE.Vector3, THREE.Vector3]> = {
+   857→   857→      overview: [new THREE.Vector3(150, 58, 132), new THREE.Vector3(100, 12, 0)],
+   858→   858→      dam: [new THREE.Vector3(76, 27, 52), new THREE.Vector3(114, 17, 0)],
+   859→   859→      valley: [new THREE.Vector3(178, 9, 46), new THREE.Vector3(118, 10, -2)],
+   860→   860→      top: [new THREE.Vector3(96, 195, 0.01), new THREE.Vector3(96, 0, 0)],
+   861→   861→    };
+   862→   862→    const [pos, tgt] = P[preset];
+   863→   863→    this.tweenFrom.copy(this.camera.position);
+   864→   864→    this.tweenFromT.copy(this.controls.target);
+   865→   865→    this.tweenTo.copy(pos);
+   866→   866→    this.tweenToT.copy(tgt);
+   867→   867→    this.tweenT = 0;
+   868→   868→  }
+   869→   869→
+   870→   870→  // ================================================================ public API
+   871→   871→  setTimeScale(v: number): void { this.timeScale = v; }
+   872→   872→  setPaused(b: boolean): void { this.paused = b; }
+   873→   873→  setGravity(g: number): void { this.gravity = g; }
+   874→   874→  setInflow(q: number): void { this.inflowQ = q; }
+   875→   875→  setBreachRate(v: number): void { this.breachRate = v; }
+   876→   876→  setSpeedMap(b: boolean): void { this.waterMat.uniforms.uShowSpeed.value = b ? 1 : 0; }
+   877→   877→  setFoam(b: boolean): void {
+   878→   878→    this.foamOn = b;
+   879→   879→    if (!b) {
+   880→   880→      const cu = (this.copyPass.material as THREE.ShaderMaterial).uniforms;
+   881→   881→      cu.uInit.value = this.texBlack;
+   882→   882→      this.renderTo(this.copyPass, this.rtFoamA);
+   883→   883→      this.renderTo(this.copyPass, this.rtFoamB);
+   884→   884→      this.curFoam = this.rtFoamA;
+   885→   885→      this.nextFoam = this.rtFoamB;
+   886→   886→    }
+   887→   887→  }
+   888→   888→  setSpray(b: boolean): void { this.sprayOn = b; }
+   889→   889→  setSound(b: boolean): void { this.audio.setEnabled(b); }
+   890→   890→  setCinematic(b: boolean): void {
+   891→   891→    this.cinematic = b;
+   892→   892→    this.controls.enabled = !b;
+   893→   893→    if (b) {
+   894→   894→      this.cinAngle = Math.atan2(this.camera.position.z - 105, this.camera.position.x - 105);
+   895→   895→      this.prevTimeScale = this.timeScale;
+   896→   896→      this.timeScale = Math.min(this.timeScale, 0.5);
+   897→   897→    } else {
+   898→   898→      this.timeScale = this.prevTimeScale;
+   899→   899→      this.controls.target.set(105, 14, 0);
+   900→   900→    }
+   901→   901→  }
+   902→   902→
+   903→   903→  private onResize(): void {
+   904→   904→    const w = this.container.clientWidth;
+   905→   905→    const h = this.container.clientHeight;
+   906→   906→    if (w === 0 || h === 0) return;
+   907→   907→    this.camera.aspect = w / h;
+   908→   908→    this.camera.updateProjectionMatrix();
+   909→   909→    this.renderer.setSize(w, h);
+   910→   910→    this.sprayMat.uniforms.uPixelRatio.value = this.renderer.getPixelRatio();
+   911→   911→  }
+   912→   912→
+   913→   913→  dispose(): void {
+   914→   914→    cancelAnimationFrame(this.rafId);
+   915→   915→    this.ro.disconnect();
+   916→   916→    this.audio.dispose();
+   917→   917→    this.controls.dispose();
+   918→   918→    this.scene.traverse((o) => {
+   919→   919→      const m = o as THREE.Mesh;
+   920→   920→      if (m.geometry) m.geometry.dispose();
+   921→   921→      const mat = m.material as THREE.Material | THREE.Material[] | undefined;
+   922→   922→      if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
+   923→   923→      else if (mat) mat.dispose();
+   924→   924→    });
+   925→   925→    [this.rtStateA, this.rtStateB, this.rtEta, this.rtFoamA, this.rtFoamB,
+   926→   926→      this.rtSprayA, this.rtSprayB, this.rtDown].forEach((rt) => rt.dispose());
+   927→   927→    [this.etaPass, this.velPass, this.foamPass, this.sprayPass, this.copyPass, this.downPass]
+   928→   928→      .forEach((q) => q.dispose());
+   929→   929→    [this.texBed, this.texStruct, this.texInit, this.texSprayInit, this.texBlack].forEach((t) => t.dispose());
+   930→   930→    this.renderer.dispose();
+   931→   931→    if (this.renderer.domElement.parentElement === this.container) {
+   932→   932→      this.container.removeChild(this.renderer.domElement);
+   933→   933→    }
+   934→   934→  }
+   935→   935→}
+   936→   936→

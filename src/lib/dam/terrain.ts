@@ -11,14 +11,25 @@ export const DZ = LZ / NZ;
 
 export const DAM_X = 112; // upstream face of the dam
 export const CREST = 23; // main crest elevation (m)
-export const RES_LEVEL = 21.5; // initial reservoir surface elevation
+export const RES_LEVEL = 21.5; // default reservoir surface elevation
 export const SPILL_Z0 = 18; // spillway notch band (z)
 export const SPILL_Z1 = 30;
 export const SPILL_CREST_CLOSED = 22.2; // gate-top sill when gates closed
 export const GATE_OPEN_ELEV = 15.5; // sill when gates fully open
-export const BREACH_Z0 = -14; // breach band (z)
-export const BREACH_Z1 = 10;
-export const BREACH_BOTTOM = 11.4; // final breach invert
+
+// The central dam section is split into 5 monolith blocks so a breach opens
+// exactly where blocks fail — water can only flow through the visible gap.
+export const BLOCK_Z0 = -14;
+export const BLOCK_Z1 = 10;
+export const BLOCK_N = 5;
+export const BLOCK_W = (BLOCK_Z1 - BLOCK_Z0) / BLOCK_N; // 4.8 m
+export const BREACH_BOTTOM = 11.4; // final breach invert (rubble top)
+
+// River inlet gorge at the upstream end — the reservoir is fed by a VISIBLE
+// river channel carved through the mountain wall (no water appears from nowhere).
+export const GORGE_HALF_W = 3.6; // inflow band |z| < GORGE_HALF_W
+export const SRC_X0 = 1.6;
+export const SRC_X1 = 6.0;
 
 // ---------------------------------------------------------------- value noise
 function hash2(x: number, y: number): number {
@@ -45,9 +56,13 @@ export function fbm(x: number, y: number, oct = 4): number {
   }
   return s;
 }
+function smoothstep(a: number, b: number, x: number): number {
+  const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
+  return t * t * (3 - 2 * t);
+}
 
 // ------------------------------------------------------------------- bed zone
-// Longitudinal profile + canyon walls + incised downstream channel.
+// Longitudinal profile + canyon walls + incised downstream channel + gorge inlet.
 export function bedAt(x: number, z: number): number {
   let floor: number;
   if (x < DAM_X) {
@@ -71,8 +86,14 @@ export function bedAt(x: number, z: number): number {
     floor += Math.min(t * 0.62, 24) * rough;
   }
 
-  // mountain wall closing the upstream end
-  if (x < 7) floor += (7 - x) * (7 - x) * 0.5;
+  // mountain wall closing the upstream end — with a carved river gorge
+  if (x < 9) {
+    const carve = smoothstep(GORGE_HALF_W, 8.5, wz); // 0 inside gorge, 1 outside
+    if (x < 7) floor += (7 - x) * (7 - x) * 0.5 * (0.1 + 0.9 * carve);
+    if (wz < GORGE_HALF_W + 1.2) {
+      floor = Math.min(floor, 13.4 - x * 0.09); // gorge floor feeds the reservoir
+    }
+  }
 
   // rockiness
   const amp = wz > w0 ? 5.0 : 0.55;
@@ -107,22 +128,40 @@ export function buildStructBase(): Float32Array {
   return arr;
 }
 
+export interface BreachSpan {
+  start: number; // block index 0..4
+  count: number; // 1..5
+  depth01: number; // 0 intact → 1 fully eroded
+}
+
 // Apply current breach / gate animation onto a copy of the base structure.
+// The failing blocks' top elevation descends with the SAME curve as the visual
+// blocks sink, so water always pours exactly through the visible gap.
 export function applyStructState(
   target: Float32Array,
   base: Float32Array,
-  breachElev: number | null, // null = intact
+  breach: BreachSpan | null,
   gateElev: number | null, // null = closed
 ): void {
   target.set(base);
-  if (breachElev != null) {
+  if (breach && breach.count > 0 && breach.depth01 > 0) {
+    const zA = BLOCK_Z0 + breach.start * BLOCK_W;
+    const zB = zA + breach.count * BLOCK_W;
     const i0 = Math.max(0, Math.floor(111.7 / DX));
     const i1 = Math.min(NX - 1, Math.ceil(115.4 / DX));
-    const j0 = Math.max(0, Math.floor((BREACH_Z0 + LZ / 2) / DZ));
-    const j1 = Math.min(NZ - 1, Math.ceil((BREACH_Z1 + LZ / 2) / DZ));
-    for (let j = j0; j <= j1; j++)
-      for (let i = i0; i <= i1; i++)
-        if (base[j * NX + i] > -500) target[j * NX + i] = breachElev;
+    const j0 = Math.max(0, Math.floor((zA + LZ / 2) / DZ));
+    const j1 = Math.min(NZ - 1, Math.ceil((zB + LZ / 2) / DZ));
+    for (let j = j0; j <= j1; j++) {
+      const z = (j + 0.5) * DZ - LZ / 2;
+      if (z < zA || z > zB) continue;
+      for (let i = i0; i <= i1; i++) {
+        if (base[j * NX + i] > -500) {
+          const b = bedAt((i + 0.5) * DX, z);
+          const invert = Math.min(Math.max(b + 0.4, BREACH_BOTTOM - 1.2), BREACH_BOTTOM + 1.4);
+          target[j * NX + i] = CREST + (invert - CREST) * breach.depth01;
+        }
+      }
+    }
   }
   if (gateElev != null) {
     const i0 = Math.max(0, Math.floor(111.7 / DX));
@@ -137,7 +176,7 @@ export function applyStructState(
 
 // ------------------------------------------------------------- initial fluid state
 // RGBA per cell: (eta, u, v, unused)
-export function buildInitState(): Float32Array {
+export function buildInitState(resLevel = RES_LEVEL): Float32Array {
   const arr = new Float32Array(NX * NZ * 4);
   for (let j = 0; j < NZ; j++) {
     for (let i = 0; i < NX; i++) {
@@ -147,7 +186,7 @@ export function buildInitState(): Float32Array {
       let eta = b - 0.5; // dry
       let u = 0;
       if (x < DAM_X - 0.3) {
-        if (b < RES_LEVEL) eta = RES_LEVEL; // reservoir
+        if (b < resLevel) eta = resLevel; // reservoir
       } else if (b < 10.2) {
         eta = b + 0.4; // base river flow downstream
         u = 0.7;
@@ -166,10 +205,6 @@ export function buildInitState(): Float32Array {
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
-function smoothstep(a: number, b: number, x: number): number {
-  const t = clamp01((x - a) / (b - a));
-  return t * t * (3 - 2 * t);
-}
 
 // slope: |∇bed| estimated by caller
 export function terrainColor(
@@ -181,37 +216,38 @@ export function terrainColor(
 ): void {
   const n = fbm(x * 0.35 + 11.1, z * 0.35 + 4.2, 3);
   const n2 = fbm(x * 0.06 + 1.7, z * 0.06 + 9.4, 2);
+  const strata = Math.sin(b * 0.85 + n2 * 3.1) * 0.5 + 0.5; // rock banding
 
-  // base rock
-  let r = 0.33 + 0.09 * n;
-  let g = 0.30 + 0.075 * n;
-  let bl = 0.26 + 0.06 * n;
+  // base rock with subtle stratification
+  let r = 0.32 + 0.085 * n + 0.035 * strata;
+  let g = 0.29 + 0.07 * n + 0.03 * strata;
+  let bl = 0.255 + 0.055 * n + 0.022 * strata;
 
-  // grass on gentle terrain (mostly downstream benches + upstream valley edge)
-  const grass = smoothstep(0.35, 0.12, slope) * smoothstep(24, 17, b) * (0.55 + 0.45 * n2);
-  r = r * (1 - grass) + 0.23 * grass;
-  g = g * (1 - grass) + 0.34 * grass;
-  bl = bl * (1 - grass) + 0.16 * grass;
+  // lush grass on gentle terrain (tropical valley floor + benches)
+  const grass = smoothstep(0.38, 0.1, slope) * smoothstep(25, 17.5, b) * (0.5 + 0.5 * n2);
+  r = r * (1 - grass) + (0.16 + 0.05 * n2) * grass;
+  g = g * (1 - grass) + (0.30 + 0.08 * n2) * grass;
+  bl = bl * (1 - grass) + (0.115 + 0.03 * n2) * grass;
 
   // sandy channel bed
   const sand = smoothstep(0.6, 1.8, 1.8 - slope) * smoothstep(10.8, 9.2, b) * (x > DAM_X - 4 ? 1 : 0);
-  r = r * (1 - sand) + 0.46 * sand;
-  g = g * (1 - sand) + 0.39 * sand;
-  bl = bl * (1 - sand) + 0.28 * sand;
+  r = r * (1 - sand) + 0.47 * sand;
+  g = g * (1 - sand) + 0.41 * sand;
+  bl = bl * (1 - sand) + 0.30 * sand;
 
-  // dark sediment under the reservoir
-  if (x < DAM_X && b < RES_LEVEL) {
-    const s = smoothstep(RES_LEVEL, RES_LEVEL - 2.5, b);
-    r = r * (1 - s) + 0.27 * s;
-    g = g * (1 - s) + 0.245 * s;
-    bl = bl * (1 - s) + 0.20 * s;
+  // dark wet sediment under the reservoir + drawdown stain ring
+  if (x < DAM_X && b < RES_LEVEL + 0.7) {
+    const s = smoothstep(RES_LEVEL + 0.7, RES_LEVEL - 2.5, b);
+    r = r * (1 - s) + 0.235 * s;
+    g = g * (1 - s) + 0.215 * s;
+    bl = bl * (1 - s) + 0.175 * s;
   }
 
-  // subtle altitude fade on high rock
-  const high = smoothstep(28, 42, b);
-  r = r * (1 - high) + 0.37 * high;
-  g = g * (1 - high) + 0.36 * high;
-  bl = bl * (1 - high) + 0.35 * high;
+  // sun-bleached rock higher up
+  const high = smoothstep(28, 44, b);
+  r = r * (1 - high) + 0.40 * high;
+  g = g * (1 - high) + 0.385 * high;
+  bl = bl * (1 - high) + 0.36 * high;
 
   out.r = clamp01(r);
   out.g = clamp01(g);

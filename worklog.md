@@ -56,3 +56,121 @@ Stage Summary:
   overtopping inflow; reset; slow-motion; gravity on Moon/Mars; speed colormap; foam/spray; ambient sound.
 - Known headless-only artifact: rAF throttling in the sandbox browser slows the animation during
   automated tests; in a real browser it runs at rAF speed (415 fps observed in-engine).
+
+---
+Task ID: 2
+Agent: Super Z (main agent)
+Task: Transform DAM BREAK LAB into DAMSAFE 3D (Real-Time Dam Risk Prediction & Flood Digital Twin)
+per the uploaded 65-section spec, plus user-requested improvements: increased graphics quality,
+better water simulation, fix "water flowing from somewhere else", blue-tinted reflective water,
+and more detailed, realistic models.
+
+Work Log:
+- Loaded fullstack-dev skill + agent-browser skill; read existing codebase and the full uploaded spec.
+- config layer (NEW src/lib/damsafe/config.ts): reusable dam configuration architecture — Idukki
+  (concrete double-curvature arch, FRL 1683.39 m, 1996 Mm³, reference) and Mullaperiyar (masonry
+  gravity, FRL 43.28 m/142 ft, 443 Mm³, reference) with per-dam demo-world scale factors
+  (time 1–2 min/s, discharge, length, area, building, population), 6 villages, 3 shelters,
+  6 critical-infrastructure assets, 4-gauge network, scenario defaults, rain scenarios, level
+  mapping helpers; everything honestly labeled SIMULATED/DEMO.
+- terrain.ts: carved a VISIBLE river gorge inlet through the upstream mountain wall (fixes
+  "water appearing from somewhere else" — inflow now enters through an obvious channel); dam central
+  section split into 5 monolith BLOCKS (BLOCK_Z0..Z1, 4.8 m each) with parameterized breach span
+  {start,count,depth01} so the struct field matches the failing visual blocks exactly; per-column
+  breach invert (rubble top) aligned between sim + visuals; richer terrain colors (rock strata
+  banding, lush tropical grass, wet drawdown ring).
+- glsl.ts: ETA pass gained reservoir level DRIVE (uDriveEta/Rate, lowering drains everywhere, raising
+  only below target so dry land never floods — drives the live level slider without resets);
+  water shader v2: blue-tinted body (shallow→deep absorption), blue-shifted boosted sky reflection,
+  tighter Fresnel, dual-lobe sun specular (glitter + gloss), flow-advected 3-octave ripples,
+  shoreline whiteness, ANALYSIS LAYERS (1 depth ramp, 2 velocity jet, 3 arrival ramp driven by a
+  48×28 arrival texture; layers gated downstream of the dam; unflooded water stays natural);
+  SNAP_FRAG bilinear downsampler for timeline snapshots.
+- props.ts (fully rebuilt for realism): procedural canvas concrete texture (aggregate speckle,
+  formwork joints, tie holes, weather stains) + asphalt texture with lane dashes; detailed dam —
+  crest roadway with center lines, instanced steel railings, lamp posts, 3 spillway piers with
+  nose + 2 radial gates with trunnion arms/hubs, hoist deck + roof + columns, upstream algal stain
+  band, right-abutment control building (windows/door/roof/mast), stilling-basin apron with 3 rows
+  of baffle blocks; breach blocks carry their own parapet + crest-road patch so they visibly fail;
+  Kerala-style houses (plinth, tinted walls, framed windows, door, pitched tile gable or flat roof
+  with water tank) ×10; vegetation — coconut palms (segmented curved trunk, 8 fronds, nuts),
+  broadleaf (dodecahedron canopy), banana clusters ×24; terrain-following road ribbons (+z & −z
+  benches, bridge spurs) with center dashes; 4-span girder bridge with railings and piers;
+  4 gauge stations (pole, cabinet, solar panel, antenna); infra marker pins (hospital/school/
+  bridge/substation/waterworks, color-coded); jetty dock + 2 moored boats; 16 boulders.
+- engine.ts (major upgrade): EffectComposer pipeline (RenderPass + opt-in UnrealBloom + OutputPass,
+  ACES, 4096² PCF shadows); scenario system runScenario({levelFrac, mechanism overtopping/piping/
+  structural, breachWidthM→1–5 blocks, formationMin→tau, location left/center/right, rain}) with
+  staged job progress (preparing→reservoir→breach→flood→processing); breach blocks sink with the
+  SAME curve as the struct field (visual top == simulated elevation — water only ever pours through
+  the visible gap; fixes the wrong-origin flow complaint); overtopping surcharges above crest then
+  auto-triggers erosion; reservoir drive for LIVE monitoring; TIME MACHINE — bilinear half-res
+  snapshots every 2.5 demo-s (ring of 42), scrubTo/exitScrub restore full-res state via copy pass;
+  per-gauge stats (Q, peak, depth, velocity, arrival, real distance) for G1–G4; arrival-time
+  tracking downstream-only, uploaded as texture scaled to real seconds; rate-of-rise (real m/hr)
+  computed engine-side; evac route dashed line; focusOn camera; layer/HD/infra/foam/spray/sound APIs.
+- analysis.ts (NEW): transparent weighted risk engine (level 30 / rise 15 / inflow 15 / rain 15 /
+  spillway 15 / structural 10, clamped 0..100, LOW/MODERATE/HIGH/EXTREME bands, WHY-explanations);
+  water-balance forecast (+1/3/6/12 h, MWL/drawdown-bounded, ML-ready slot); impact analysis from
+  spatial intersections (flooded km² downstream-only, population, buildings, roads-km flooded,
+  villages, hospitals/schools/bridges, max depth/velocity, per-village arrival/depth/velocity);
+  evacuation planner (nearest shelter, 32 km/h travel, flood-arrival margin, UNSAFE flag, route
+  polylines); predicted-vs-observed validation (simulated satellite classification noise →
+  agreement %/overlap/missed/false areas).
+- UI (src/components/damsafe/{ui,panels}.tsx + page.tsx): dark navy command-center shell — top bar
+  (brand, dam selector, LIVE/WHAT-IF mode radio, SIMULATED DATA chip, SYSTEM ONLINE pulse, 6 tabs:
+  COMMAND CENTER / DIGITAL TWIN / SCENARIOS / FLOOD IMPACT / EVACUATION / DATA & VALIDATION);
+  command center = reservoir KPIs + level slider + forecast table + risk card with WHY list;
+  scenarios = mechanism radios, level/width/formation/location/rain/duration controls, RUN FAILURE
+  SCENARIO, job checklist with progress; flood impact = 8 KPI tiles + per-village table (click→
+  camera focus) + critical infrastructure INUNDATED/SAFE; evacuation = shelters + plans + route
+  drawing; data & validation = freshness, model agreement, ESP32 MQTT demo (simulated sensor drives
+  the twin 1:1, topic ticker), hydraulic model & assumptions, urban change detection; digital twin =
+  layer radios + foam/spray/HD/infra/sound toggles + engineering mode (speed map, time scale);
+  right rail = gauge network (G1–G4 switcher, live hydrograph canvas with cursor, alerts with
+  prototype disclaimer); bottom = TIME MACHINE slider (scrub with HISTORICAL FRAME badge + return
+  to LIVE), play/pause, 6 camera presets, cinema mode; mobile-responsive (panels auto-collapse,
+  topbar wraps, tabs scroll).
+- Browser verification loop (agent-browser, fixed via real clicks/evals):
+  * Stale-import 500 (GradientLegend) → fixed import.
+  * Bloom whiteout (HDR sky blooms everything) → bloom now opt-in with high threshold; base look
+    carried by lighting/texture/detail instead.
+  * PCFSoftShadowMap removed in three r186 → PCFShadowMap.
+  * Rate-of-rise spike on first stats tick → guarded; rise now engine-computed (real m/hr).
+  * Risk score went NEGATIVE on falling level → factor scores clamped ≥ 0; forecast drawdowns
+    bounded.
+  * Level drive left shelf cells perched (level stat stuck at 21.5 while lake drained) → drive-down
+    now applies everywhere; pool level stat uses depth > 0.5 m cells.
+  * Impact/arrival counted the RESERVOIR as flood → downstream-only gating (x > 114 m) in engine
+    arrival tracking, analysis impact, and shader layers; "0 min" → "<1 min" formatting.
+  * Arrival layer painted unflooded water green → unflooded stays natural color.
+  * Stain band read as a dark floating ribbon from upstream → subtle (2 m, 16% opacity).
+  * Substep budget 8 → 14 (CFL-safe up to 2× UI time scale; verified 22.6 m/s clamp only appears
+    at test-hack 25–40× speeds, sane 1.5–3.5 m/s at normal speeds).
+  * Mobile 390×844: overlapping panels → auto-collapse defaults + wrapping topbar + scrollable tabs.
+- Verified end-to-end via UI clicks: RUN FAILURE SCENARIO (structural, center, 100 m, 30 min) →
+  block sinks in sync with struct field, water pours exactly through the visible gap, flood wave
+  sweeps valley/roads/houses, job checklist completes, SIMULATED DAM FAILURE pill + CRITICAL alerts;
+  arrival 20 min & depth 2.3 m at G1, peak hydrograph drawn; layers depth/velocity/arrival all
+  render; timeline scrub back to snapshot + LIVE return; evacuation plan + route drawn;
+  Mullaperiyar switch relabels villages/shelters/distances; ESP32 demo streams MQTT ticks and
+  drives the twin level; reservoir slider drains lake to 30% (stranded dock/boats) and refills.
+- Final lint clean, dev.log clean, fresh-load boot verified, no page errors.
+
+Stage Summary:
+- Deliverable: DAMSAFE 3D at / (Next.js 16 + Three.js + Tailwind 4 + shadcn).
+- Key files: src/lib/damsafe/{config,analysis}.ts, src/lib/dam/{terrain,glsl,props,engine}.ts,
+  src/components/damsafe/{ui,panels}.tsx, src/app/page.tsx, src/app/layout.tsx (metadata).
+- Preserved verified GPU Saint-Venant solver (Rusanov/HLL + Audusse well-balancing + Manning);
+  all scenario physics still solver-driven, nothing keyframed.
+- User asks all addressed: graphics (textures, 4k shadows, detailed props, bloom opt-in), better
+  water (blue tint + blue-shifted reflections + advected ripples + glitter), breach origin fixed
+  (visible gorge inlet + blocks that fail in sync with the solver's breach field), detailed
+  realistic models (dam superstructure, Kerala village, palms, bridge, roads, gauges, boats).
+- DAMSAFE platform: two dam profiles, LIVE + WHAT-IF modes, risk engine with explanations,
+  forecast, breach scenarios, flood depth/velocity/arrival layers, 4 gauges + hydrographs,
+  time machine scrubbing, impact analysis, evacuation planning, data freshness + predicted-vs-
+  observed validation + ESP32/MQTT prototype demo — all labeled LIVE/FORECAST/SIMULATED honestly.
+- Known limitation: the headless sandbox throttles rAF, so automated screenshots run far below real
+  speed; solver stays CFL-stable at UI time scales (≤2×); timeline scrubs restore solver state at
+  half resolution (documented in UI as HISTORICAL FRAME).

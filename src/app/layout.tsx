@@ -14,16 +14,16 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Dam Break Lab — Real-time 3D Hydrodynamics",
+  title: "DAMSAFE 3D — Real-Time Dam Risk Prediction & Flood Digital Twin",
   description:
-    "Interactive 3D dam-break simulation: GPU shallow-water equations, breach erosion, spillway gates, foam, spray and flood-wave propagation in your browser.",
-  keywords: ["dam break", "shallow water equations", "hydrodynamics", "3D simulation", "WebGL", "Three.js"],
+    "Dam risk monitoring, what-if failure scenarios, GPU shallow-water flood simulation, depth/velocity/arrival layers, impact analysis and evacuation planning for Idukki and Mullaperiyar dams.",
+  keywords: ["dam safety", "dam break", "flood simulation", "digital twin", "shallow water equations", "Idukki", "Mullaperiyar", "GIS", "risk assessment"],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "Dam Break Lab — Real-time 3D Hydrodynamics",
-    description: "Break a dam and watch the physics unfold — real Saint-Venant equations on GPU.",
+    title: "DAMSAFE 3D — Real-Time Dam Risk Prediction & Flood Digital Twin",
+    description: "From reservoir monitoring to dam-failure scenarios, hydrodynamic flood prediction, impact analysis and evacuation — one 3D geospatial platform.",
     type: "website",
   },
 };

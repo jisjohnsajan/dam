@@ -1,38 +1,77 @@
-// Dam-break hydrodynamics engine: Three.js scene + GPU shallow-water solver.
+// DAMSAFE 3D engine: Three.js scene + GPU shallow-water solver + digital-twin logic.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Sky } from 'three/examples/jsm/objects/Sky.js';
 import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 import {
   LX, LZ, NX, NZ, DX, DZ,
-  DAM_X, CREST, RES_LEVEL,
+  DAM_X, CREST,
   SPILL_CREST_CLOSED, GATE_OPEN_ELEV,
-  BREACH_BOTTOM,
-  bedAt, fbm, buildStructBase, applyStructState, buildInitState, terrainColor,
+  BREACH_BOTTOM, BLOCK_N, BLOCK_W, BLOCK_Z0,
+  GORGE_HALF_W, SRC_X0, SRC_X1,
+  bedAt, buildStructBase, applyStructState, buildInitState, terrainColor,
+  type BreachSpan,
 } from './terrain';
 import {
-  QUAD_VERT, ETA_FRAG, VEL_FRAG, FOAM_FRAG, SPRAY_FRAG, COPY_FRAG, DOWN_FRAG,
+  QUAD_VERT, ETA_FRAG, VEL_FRAG, FOAM_FRAG, SPRAY_FRAG, COPY_FRAG, DOWN_FRAG, SNAP_FRAG,
   WATER_VERT, WATER_FRAG, SPRAY_POINTS_VERT, SPRAY_POINTS_FRAG, TEXEL, CELL,
 } from './glsl';
 import {
   FlowField, buildDam, buildHouses, buildTrees, buildBarrels, buildDebris,
+  buildRoads, buildGaugeStations, buildInfraMarkers, buildDockBoats, buildBoulders,
   RiverAudio, type DamProps, type House, type Tree, type Barrel, type Chunk,
 } from './props';
+import {
+  DAMS, GAUGES, fracToSimLevel, simLevelToFrac,
+  type DamId, type DamProfile, type FailureMechanism, type BreachLocation, type RainScenario,
+} from '@/lib/damsafe/config';
 
-export type Phase = 'ready' | 'breach' | 'gates' | 'flood';
-export type CamPreset = 'overview' | 'dam' | 'valley' | 'top';
+export type Phase = 'live' | 'scenario' | 'scrub';
+export type CamPreset = 'overview' | 'dam' | 'valley' | 'top' | 'reservoir' | 'impact';
+export type LayerMode = 0 | 1 | 2 | 3; // natural | depth | velocity | arrival
+
+export interface ScenarioParams {
+  levelFrac: number;
+  mechanism: FailureMechanism;
+  breachWidthM: number;
+  formationMin: number;
+  location: BreachLocation;
+  rain: RainScenario;
+}
+
+export interface GaugeStat {
+  id: string;
+  label: string;
+  q: number; // demo m³/s
+  qPeak: number;
+  depth: number; // m
+  vel: number; // m/s
+  arrivalMin: number | null; // real minutes
+  distKm: number;
+}
 
 export interface DamStats {
-  t: number;
-  q: number;
-  qPeak: number;
-  level: number;
+  t: number; // demo sim seconds
+  realMin: number; // scenario real minutes
+  level: number; // demo sim m
+  levelFrac: number;
+  riseMPerHr: number; // real metres/hour (scaled)
   vmax: number;
   froude: number;
   fps: number;
   phase: Phase;
-  overtopping: boolean;
+  scenarioActive: boolean;
+  breach01: number;
+  progress01: number;
+  stage: number; // 0 idle, 1 preparing, 2 reservoir, 3 breach, 4 flood, 5 processing
+  gauges: GaugeStat[];
+  floodedCells: number;
+  qOut: number; // demo m³/s through breach+gates (G1)
 }
 
 const DT_MAX = 0.008;
@@ -40,9 +79,20 @@ const MANNING = 0.028;
 const SPRAY_N = 128;
 const DOWN_W = 48;
 const DOWN_H = 28;
+const SNAP_W = 192;
+const SNAP_H = 112;
+const SNAP_MAX = 42;
+const SNAP_EVERY = 2.5; // demo s
 
 const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
 const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+
+interface Floater {
+  mesh: THREE.Object3D;
+  pos: THREE.Vector3;
+  vel: THREE.Vector3;
+  home: THREE.Vector3;
+}
 
 export class DamSim {
   // ---- three core
@@ -54,6 +104,8 @@ export class DamSim {
   private lastFrameTime = performance.now();
   private rafId = 0;
   private ro: ResizeObserver;
+  private composer!: EffectComposer;
+  private bloomPass!: UnrealBloomPass;
 
   // ---- GPU sim resources
   private rtStateA!: THREE.WebGLRenderTarget;
@@ -64,11 +116,13 @@ export class DamSim {
   private rtSprayA!: THREE.WebGLRenderTarget;
   private rtSprayB!: THREE.WebGLRenderTarget;
   private rtDown!: THREE.WebGLRenderTarget;
+  private rtSnap!: THREE.WebGLRenderTarget;
   private texBed!: THREE.DataTexture;
   private texStruct!: THREE.DataTexture;
   private texInit!: THREE.DataTexture;
   private texSprayInit!: THREE.DataTexture;
   private texBlack!: THREE.DataTexture;
+  private texArr!: THREE.DataTexture;
 
   private etaPass!: FullScreenQuad;
   private velPass!: FullScreenQuad;
@@ -76,6 +130,7 @@ export class DamSim {
   private sprayPass!: FullScreenQuad;
   private copyPass!: FullScreenQuad;
   private downPass!: FullScreenQuad;
+  private snapPass!: FullScreenQuad;
 
   private structArr: Float32Array;
   private structBase: Float32Array;
@@ -89,6 +144,8 @@ export class DamSim {
   private trees: Tree[] = [];
   private barrels: Barrel[] = [];
   private chunks: Chunk[] = [];
+  private floaters: Floater[] = [];
+  private evacLine: THREE.Line | null = null;
   private audio = new RiverAudio();
   private sunDir = new THREE.Vector3(-0.42, 0.62, 0.28).normalize();
 
@@ -100,39 +157,64 @@ export class DamSim {
   private curSpray!: THREE.WebGLRenderTarget;
   private nextSpray!: THREE.WebGLRenderTarget;
 
+  // ---- config
+  private damProfile: DamProfile = DAMS.idukki;
+  private liveFrac = 0.84;
+
   simTime = 0;
-  private phase: Phase = 'ready';
+  private phase: Phase = 'live';
+  // scenario state
+  private scenario: ScenarioParams | null = null;
+  private scenT = 0;
   private breachT: number | null = null;
-  private breachElev: number | null = null;
+  private breachTau = 15;
+  private breachPre = 0; // piping pre-depth
+  private breachSpan: BreachSpan | null = null;
+  private breachDepth01 = 0;
+  private breachInverts: number[] = [];
   private gateT: number | null = null;
   private gateElev: number | null = null;
-  private overtopping = false;
   private overtopT = 0;
   private structDirty = true;
   private shake = 0;
   private paused = false;
+  private scrubbing = false;
 
   // params
   private timeScale = 1;
   private prevTimeScale = 1;
   private gravity = 9.81;
-  private inflowQ = 8;
+  private baseInflow = 8;
+  private rainInflow = 0;
   private breachRate = 1;
   private foamOn = true;
   private sprayOn = true;
   private showSpeed = false;
+  private layerMode: LayerMode = 0;
   private cinematic = false;
   private cinAngle = 0;
 
-  // stats
+  // stats / readback
   private field = new FlowField();
   private readBuf = new Float32Array(DOWN_W * DOWN_H * 4);
+  private arr = new Float32Array(DOWN_W * DOWN_H); // first-flood demo seconds (0 = dry)
+  private arrDirty = true;
   private qPeak = 0;
   private frame = 0;
   private fpsEma = 60;
   private stripCells = 1;
   private srcRate = 0;
   private sample = { eta: 0, u: 0, v: 0 };
+  private gaugePeaks = [0, 0, 0, 0];
+  private gaugeArr: (number | null)[] = [null, null, null, null];
+  private lastLevel = 0;
+  private lastStatSimT = 0;
+  private levelRise = 0; // demo m/s (ema)
+
+  // timeline snapshots
+  private snaps: { t: number; data: Float32Array }[] = [];
+  private snapClock = 0;
+  private snapReadBuf = new Float32Array(SNAP_W * SNAP_H * 4);
 
   // camera tween
   private tweenT = 1;
@@ -150,7 +232,7 @@ export class DamSim {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.8;
+    this.renderer.toneMappingExposure = 0.85;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(this.renderer.domElement);
@@ -172,8 +254,8 @@ export class DamSim {
     const sky = new Sky();
     sky.scale.setScalar(12000);
     const su = sky.material.uniforms;
-    su.turbidity.value = 6;
-    su.rayleigh.value = 2.2;
+    su.turbidity.value = 5.5;
+    su.rayleigh.value = 2.4;
     su.mieCoefficient.value = 0.006;
     su.mieDirectionalG.value = 0.85;
     su.sunPosition.value.copy(this.sunDir);
@@ -181,22 +263,22 @@ export class DamSim {
     skyScene.add(sky);
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(skyScene).texture;
-    this.scene.environmentIntensity = 0.22;
+    this.scene.environmentIntensity = 0.32;
     pmrem.dispose();
     this.scene.add(sky);
 
     // lights
-    const sun = new THREE.DirectionalLight(0xffe8c8, 2.0);
+    const sun = new THREE.DirectionalLight(0xffe8c8, 2.1);
     sun.position.copy(this.sunDir).multiplyScalar(420);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(4096, 4096);
     const sc = sun.shadow.camera;
     sc.left = -95; sc.right = 95; sc.top = 95; sc.bottom = -95; sc.near = 100; sc.far = 950;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.6;
     sun.target.position.set(105, 10, 0);
     this.scene.add(sun, sun.target);
-    this.scene.add(new THREE.HemisphereLight(0xbfd8ef, 0x6b6354, 0.42));
+    this.scene.add(new THREE.HemisphereLight(0xbfd8ef, 0x6b6354, 0.45));
 
     this.buildTerrainMesh();
     this.buildGpuResources();
@@ -210,6 +292,17 @@ export class DamSim {
     this.curSpray = this.rtSprayA;
     this.nextSpray = this.rtSprayB;
     this.resetSim();
+
+    // post-processing: subtle bloom for sun glints & foam highlights
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(container.clientWidth, container.clientHeight),
+      0.5, 0.3, 3.5,
+    );
+    this.bloomPass.enabled = false; // opt-in "HD glow" (HDR skies bloom easily)
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(new OutputPass());
 
     this.ro = new ResizeObserver(() => this.onResize());
     this.ro.observe(container);
@@ -253,7 +346,7 @@ export class DamSim {
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(
       geo,
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, envMapIntensity: 0.18 }),
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, envMapIntensity: 0.22 }),
     );
     mesh.receiveShadow = true;
     this.scene.add(mesh);
@@ -306,6 +399,7 @@ export class DamSim {
     this.rtSprayA = this.mkRT(SPRAY_N, SPRAY_N, THREE.NearestFilter);
     this.rtSprayB = this.mkRT(SPRAY_N, SPRAY_N, THREE.NearestFilter);
     this.rtDown = this.mkRT(DOWN_W, DOWN_H, THREE.NearestFilter);
+    this.rtSnap = this.mkRT(SNAP_W, SNAP_H, floatLinear ? THREE.LinearFilter : THREE.NearestFilter);
 
     this.structBase = buildStructBase();
     this.structArr = new Float32Array(this.structBase);
@@ -315,7 +409,7 @@ export class DamSim {
     this.texStruct = new THREE.DataTexture(this.structArr, NX, NZ, THREE.RedFormat, THREE.FloatType);
     this.texStruct.minFilter = this.texStruct.magFilter = THREE.NearestFilter;
     this.texStruct.needsUpdate = true;
-    this.texInit = new THREE.DataTexture(buildInitState(), NX, NZ, THREE.RGBAFormat, THREE.FloatType);
+    this.texInit = new THREE.DataTexture(buildInitState(fracToSimLevel(this.liveFrac)), NX, NZ, THREE.RGBAFormat, THREE.FloatType);
     this.texInit.minFilter = this.texInit.magFilter = THREE.NearestFilter;
     this.texInit.needsUpdate = true;
 
@@ -327,6 +421,10 @@ export class DamSim {
     this.texSprayInit.needsUpdate = true;
     this.texBlack = new THREE.DataTexture(new Float32Array([0, 0, 0, 1]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
     this.texBlack.needsUpdate = true;
+
+    this.texArr = new THREE.DataTexture(this.arr, DOWN_W, DOWN_H, THREE.RedFormat, THREE.FloatType);
+    this.texArr.minFilter = this.texArr.magFilter = foamFilter;
+    this.texArr.needsUpdate = true;
 
     const mat = (frag: string, uniforms: Record<string, THREE.IUniform>) =>
       new THREE.ShaderMaterial({ vertexShader: QUAD_VERT, fragmentShader: frag, uniforms, depthTest: false, depthWrite: false });
@@ -344,7 +442,12 @@ export class DamSim {
       ...common,
       uDt: { value: 0 },
       uSrcRate: { value: 0 },
-      uSrcBox: { value: new THREE.Vector4(2 / LX, 8 / LX, (-34 + LZ / 2) / LZ, (34 + LZ / 2) / LZ) },
+      uSrcBox: { value: new THREE.Vector4(SRC_X0 / LX, SRC_X1 / LX, (-GORGE_HALF_W + LZ / 2) / LZ, (GORGE_HALF_W + LZ / 2) / LZ) },
+      uDriveOn: { value: 1 },
+      uDriveEta: { value: fracToSimLevel(this.liveFrac) },
+      uDriveRate: { value: 1.2 },
+      uDomain: { value: new THREE.Vector2(LX, LZ) },
+      uResMaxX: { value: DAM_X - 0.4 },
     }));
     this.velPass = new FullScreenQuad(mat(VEL_FRAG, {
       ...common,
@@ -365,17 +468,24 @@ export class DamSim {
       uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
       uDt: { value: 0 },
       uTime: { value: 0 },
-      uSpawnSpeed: { value: 3.2 },
+      uSpawnSpeed: { value: 2.6 },
       uDomain: { value: new THREE.Vector2(LX, LZ) },
     }));
     this.copyPass = new FullScreenQuad(mat(COPY_FRAG, { uInit: { value: null } }));
     this.downPass = new FullScreenQuad(mat(DOWN_FRAG, { uState: { value: null } }));
+    this.snapPass = new FullScreenQuad(mat(SNAP_FRAG, {
+      uState: { value: null },
+      uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+    }));
 
-    // count inflow strip cells (x ∈ [2,8], bed < 15)
+    // count inflow strip cells (gorge inlet)
     let n = 0;
-    for (let j = 0; j < NZ; j++)
-      for (let i = Math.ceil(2 / DX); i < Math.floor(8 / DX); i++)
-        if (this.bedGrid[j * NX + i] < 15) n++;
+    for (let j = 0; j < NZ; j++) {
+      const z = (j + 0.5) * DZ - LZ / 2;
+      if (Math.abs(z) > GORGE_HALF_W) continue;
+      for (let i = Math.ceil(SRC_X0 / DX); i < Math.floor(SRC_X1 / DX); i++)
+        if (this.bedGrid[j * NX + i] < 14.5) n++;
+    }
     this.stripCells = Math.max(n, 1);
   }
 
@@ -400,13 +510,16 @@ export class DamSim {
         uBed: { value: this.texBed },
         uStruct: { value: this.texStruct },
         uFoam: { value: null },
+        uArrTex: { value: this.texArr },
         uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
         uCell: { value: new THREE.Vector2(CELL[0], CELL[1]) },
         uDomain: { value: new THREE.Vector2(LX, LZ) },
+        uDownGrid: { value: new THREE.Vector2(DOWN_W, DOWN_H) },
         uSunDir: { value: this.sunDir },
         uSunColor: { value: new THREE.Vector3(1.0, 0.92, 0.8) },
         uCamPos: { value: new THREE.Vector3() },
         uShowSpeed: { value: 0 },
+        uLayerMode: { value: 0 },
         uTime: { value: 0 },
         uFogColor: { value: new THREE.Color(0xc6d8ea) },
         uFogNear: { value: 380 },
@@ -464,6 +577,27 @@ export class DamSim {
     const d = buildDebris();
     this.chunks = d.chunks;
     this.scene.add(d.group);
+    const r = buildRoads();
+    this.scene.add(r.group);
+    const g = buildGaugeStations();
+    this.scene.add(g.group);
+    const m = buildInfraMarkers();
+    this.scene.add(m.group);
+    const bo = buildBoulders();
+    this.scene.add(bo.group);
+    const dock = buildDockBoats();
+    this.scene.add(dock.group);
+    for (const br of this.barrels) {
+      this.floaters.push({ mesh: br.mesh, pos: br.pos, vel: br.vel, home: br.mesh.position.clone() });
+    }
+    for (const bt of dock.boats) {
+      this.floaters.push({
+        mesh: bt.mesh,
+        pos: bt.mesh.position.clone(),
+        vel: new THREE.Vector3(),
+        home: bt.mesh.position.clone(),
+      });
+    }
   }
 
   // ================================================================ sim stepping
@@ -534,18 +668,71 @@ export class DamSim {
     this.nextSpray = this.rtSprayB;
     this.simTime = 0;
     this.qPeak = 0;
+    this.snaps = [];
+    this.arr.fill(0);
+    this.arrDirty = true;
+    this.gaugePeaks = [0, 0, 0, 0];
+    this.gaugeArr = [null, null, null, null];
     this.applyStruct(null, null);
   }
 
   // ================================================================ scenarios
-  private applyStruct(breach: number | null, gate: number | null): void {
+  private applyStruct(breach: BreachSpan | null, gate: number | null): void {
     applyStructState(this.structArr, this.structBase, breach, gate);
     this.texStruct.needsUpdate = true;
   }
 
-  breakDam(): void {
-    if (this.breachT !== null) return;
-    this.phase = 'breach';
+  private breachSpanFor(widthM: number, loc: BreachLocation): BreachSpan {
+    const count = clamp(Math.round(widthM / 32), 1, BLOCK_N);
+    const start = loc === 'left' ? 0 : loc === 'right' ? BLOCK_N - count : Math.floor((BLOCK_N - count) / 2);
+    return { start, count, depth01: 0 };
+  }
+
+  private blockInvert(zMid: number): number {
+    const b = bedAt(DAM_X + 1.5, zMid);
+    return clamp(b + 0.4, BREACH_BOTTOM - 1.2, BREACH_BOTTOM + 1.4);
+  }
+
+  runScenario(p: ScenarioParams): void {
+    if (this.scenario) return;
+    this.scenario = p;
+    this.phase = 'scenario';
+    this.scenT = 0;
+    this.snapClock = 0;
+    this.overtopT = 0;
+    this.rainInflow = p.rain === 'none' ? 0 : p.rain === 'moderate' ? 26 : 64;
+    this.breachSpan = null;
+    this.breachT = null;
+    this.breachDepth01 = 0;
+    this.structDirty = true;
+
+    // reservoir set to the scenario level (drive takes it there quickly)
+    const target = clamp(fracToSimLevel(p.levelFrac), 0, 24.4);
+    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+    eu.uDriveEta.value = target;
+    eu.uDriveOn.value = 1;
+
+    if (p.mechanism === 'overtopping') {
+      // surge inflow pushes the lake above the crest; erosion follows
+      eu.uDriveEta.value = Math.max(target, CREST + 1.0);
+    } else {
+      // schedule breach after the reservoir reaches level (~2-6 demo s)
+      this.breachT = -clamp((target - this.lastLevel) / 1.4, 1.5, 5);
+      this.breachTau = Math.max(p.formationMin / this.damProfile.timeMinPerSec, 4) / (p.mechanism === 'piping' ? 0.65 : 1) / this.breachRate;
+      this.breachPre = p.mechanism === 'piping' ? 0.22 : 0;
+      const span = this.breachSpanFor(p.breachWidthM, p.location);
+      this.breachSpan = span;
+      this.breachInverts = [];
+      for (let b = span.start; b < span.start + span.count; b++) {
+        const z0 = BLOCK_Z0 + b * BLOCK_W;
+        this.breachInverts.push(this.blockInvert(z0 + BLOCK_W / 2));
+      }
+    }
+    this.audio.burst(0.2);
+  }
+
+  private triggerBreachErosion(): void {
+    if (this.breachT === null || this.breachT >= 0) return;
     this.breachT = 0;
     this.shake = 1;
     this.audio.burst(1);
@@ -554,34 +741,34 @@ export class DamSim {
 
   openGates(): void {
     if (this.gateT !== null) return;
-    this.phase = 'gates';
     this.gateT = 0;
     this.audio.burst(0.35);
   }
 
-  toggleOvertopping(): boolean {
-    this.overtopping = !this.overtopping;
-    if (this.overtopping) {
-      this.overtopT = 0;
-      this.phase = 'flood';
-    } else {
-      this.phase = 'ready';
-    }
-    return this.overtopping;
-  }
-
   reset(): void {
-    this.phase = 'ready';
+    this.phase = 'live';
+    this.scenario = null;
+    this.scenT = 0;
     this.breachT = null;
-    this.breachElev = null;
+    this.breachTau = 15;
+    this.breachPre = 0;
+    this.breachSpan = null;
+    this.breachDepth01 = 0;
+    this.breachInverts = [];
     this.gateT = null;
     this.gateElev = null;
-    this.overtopping = false;
     this.overtopT = 0;
     this.shake = 0;
-    this.dam.breachGroup.position.y = 0;
-    this.dam.breachGroup.rotation.set(0, 0, 0);
-    this.dam.gate.position.y = 18.85;
+    this.scrubbing = false;
+    this.paused = false;
+    this.rainInflow = 0;
+    this.breachRate = 1;
+    for (const blk of this.dam.breachBlocks) {
+      blk.group.position.y = 0;
+      blk.group.rotation.set(0, 0, 0);
+      blk.group.visible = true;
+    }
+    for (const g of this.dam.gates) g.position.y = 18.85;
     for (const c of this.chunks) {
       c.active = false;
       c.mesh.visible = false;
@@ -596,12 +783,20 @@ export class DamSim {
       t.prog = 0;
       t.group.rotation.x = 0;
       t.group.rotation.z = 0;
-      t.group.position.y = t.ground;
     }
-    for (const b of this.barrels) {
-      b.pos.set(b.mesh.position.x, 21.4, b.mesh.position.z);
-      b.vel.set(0, 0, 0);
+    for (const f of this.floaters) {
+      f.pos.copy(f.home);
+      f.vel.set(0, 0, 0);
+      f.mesh.position.copy(f.home);
     }
+    if (this.evacLine) {
+      this.scene.remove(this.evacLine);
+      this.evacLine.geometry.dispose();
+      this.evacLine = null;
+    }
+    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+    eu.uDriveEta.value = fracToSimLevel(this.liveFrac);
+    eu.uDriveOn.value = 1;
     this.resetSim();
   }
 
@@ -625,43 +820,31 @@ export class DamSim {
     this.fpsEma = this.fpsEma * 0.95 + (1 / Math.max(dtReal, 1e-4)) * 0.05;
     const dtSim = this.paused ? 0 : dtReal * this.timeScale;
 
-    if (dtSim > 0) {
-      // scenario animation timers
-      if (this.breachT !== null) {
-        this.breachT += dtSim;
-        const tau = 2.6 / this.breachRate;
-        const p = 1 - Math.exp(-Math.pow(this.breachT / tau, 1.7));
-        this.breachElev = CREST + (BREACH_BOTTOM - CREST) * p;
-        this.dam.breachGroup.position.y = this.breachElev - CREST;
-        this.dam.breachGroup.rotation.z = -0.05 * p;
-        this.structDirty = true;
-        if (p > 0.995) this.breachT = null;
-      }
-      if (this.gateT !== null && this.gateT < 1) {
-        this.gateT = Math.min(1, this.gateT + dtSim / 2.5);
-        const e = easeInOut(this.gateT);
-        this.gateElev = SPILL_CREST_CLOSED + (GATE_OPEN_ELEV - SPILL_CREST_CLOSED) * e;
-        this.dam.gate.position.y = 18.85 + 6.9 * e;
-        this.structDirty = true;
-      }
-      if (this.overtopping) {
-        this.overtopT += dtSim;
-      }
-      const curInflow = this.overtopping
-        ? this.inflowQ + 272 * Math.min(this.overtopT / 18, 1)
-        : this.inflowQ;
+    if (dtSim > 0 && !this.scrubbing) {
+      this.stepScenario(dtSim);
+
+      const curInflow = this.baseInflow + this.rainInflow;
       this.srcRate = curInflow / (this.stripCells * DX * DZ);
 
       if (this.structDirty) {
-        this.applyStruct(this.breachElev, this.gateElev);
+        this.applyStruct(this.breachSpan, this.gateElev);
         this.structDirty = false;
       }
 
-      const sub = clamp(Math.ceil(dtSim / DT_MAX), 1, 8);
+      const sub = clamp(Math.ceil(dtSim / DT_MAX), 1, 14);
       const h = dtSim / sub;
       for (let i = 0; i < sub; i++) this.simSubstep(h);
       this.simTime += dtSim;
       this.updateProps(dtSim);
+
+      // snapshots during a scenario for the time machine
+      if (this.scenario) {
+        this.snapClock += dtSim;
+        if (this.snapClock >= SNAP_EVERY) {
+          this.snapClock = 0;
+          this.recordSnapshot();
+        }
+      }
     }
 
     // readback for CPU physics + stats
@@ -669,6 +852,7 @@ export class DamSim {
       (this.downPass.material as THREE.ShaderMaterial).uniforms.uState.value = this.curState.texture;
       this.renderTo(this.downPass, this.rtDown);
       this.renderer.readRenderTargetPixels(this.rtDown, 0, 0, DOWN_W, DOWN_H, this.field.data);
+      this.updateArrival();
     }
 
     this.updateCamera(dtReal);
@@ -692,7 +876,7 @@ export class DamSim {
       );
       this.camera.position.add(shook);
     }
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
     if (shook) {
       this.camera.position.sub(shook);
       this.shake *= Math.exp(-dtReal * 1.15);
@@ -712,33 +896,176 @@ export class DamSim {
     this.frame++;
   };
 
+  // ------------------------------------------------ scenario + gate animation
+  private stepScenario(dt: number): void {
+    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+    const sc = this.scenario;
+
+    if (this.gateT !== null && this.gateT < 1) {
+      this.gateT = Math.min(1, this.gateT + dt / 2.5);
+      const e = easeInOut(this.gateT);
+      this.gateElev = SPILL_CREST_CLOSED + (GATE_OPEN_ELEV - SPILL_CREST_CLOSED) * e;
+      for (const g of this.dam.gates) g.position.y = 18.85 + 6.9 * e;
+      this.structDirty = true;
+    }
+
+    if (!sc) {
+      // live monitoring: drive toward the user level target
+      eu.uDriveOn.value = 1;
+      return;
+    }
+
+    this.scenT += dt;
+
+    if (sc.mechanism === 'overtopping') {
+      this.overtopT += dt;
+      // once overtopped for long enough, crest erosion begins
+      if (this.overtopT > 7 && (this.breachT === null || this.breachT < 0)) {
+        if (this.breachSpan === null) {
+          const span = this.breachSpanFor(sc.breachWidthM, sc.location);
+          this.breachSpan = span;
+          this.breachTau = Math.max(sc.formationMin / this.damProfile.timeMinPerSec, 4) / this.breachRate;
+          this.breachPre = 0;
+          this.breachInverts = [];
+          for (let b = span.start; b < span.start + span.count; b++) {
+            const z0 = BLOCK_Z0 + b * BLOCK_W;
+            this.breachInverts.push(this.blockInvert(z0 + BLOCK_W / 2));
+          }
+        }
+        this.triggerBreachErosion();
+      }
+    }
+
+    // breach formation
+    if (this.breachT !== null && this.breachSpan) {
+      this.breachT += dt;
+      if (this.breachT > 0) {
+        const p = 1 - Math.exp(-Math.pow(this.breachT / this.breachTau, 1.7));
+        this.breachDepth01 = clamp(this.breachPre + (1 - this.breachPre) * p, 0, 1);
+        this.breachSpan.depth01 = this.breachDepth01;
+        this.structDirty = true;
+        // sink the failing blocks with the SAME curve as the struct field
+        const bi = this.breachInverts;
+        for (let k = 0; k < this.breachSpan.count; k++) {
+          const blockIdx = this.breachSpan.start + k;
+          const blk = this.dam.breachBlocks[blockIdx];
+          if (!blk) continue;
+          const drop = (CREST - bi[k]) * this.breachDepth01;
+          blk.group.position.y = -drop;
+          blk.group.rotation.z = -0.05 * this.breachDepth01;
+        }
+        if (p > 0.995 && this.breachT > this.breachTau) {
+          this.breachT = null; // formation complete; struct stays at full depth
+        }
+      }
+      // stop the level drive once the breach starts draining the lake
+      if (this.breachDepth01 > 0.02 && sc.mechanism !== 'overtopping') {
+        eu.uDriveOn.value = 0;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------- arrival map
+  private updateArrival(): void {
+    const d = this.field.data;
+    let changed = false;
+    // track only downstream of the dam (the reservoir is not "flood")
+    const firstCol = Math.ceil((DAM_X + 2) / (LX / DOWN_W));
+    for (let j = 0; j < DOWN_H; j++) {
+      for (let i = firstCol; i < DOWN_W; i++) {
+        const idx = j * DOWN_W + i;
+        if (this.arr[idx] === 0 && d[idx * 4 + 3] > 0.2) {
+          this.arr[idx] = this.simTime;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      this.arrDirty = true;
+      // upload scaled to real seconds (arrivalRamp normalizes over 240 min)
+      const scale = this.damProfile.timeMinPerSec * 60;
+      const up = new Float32Array(DOWN_W * DOWN_H);
+      for (let i = 0; i < up.length; i++) up[i] = this.arr[i] * scale;
+      this.texArr.image.data = up;
+      this.texArr.needsUpdate = true;
+    }
+  }
+
+  // -------------------------------------------------------------- snapshots
+  private recordSnapshot(): void {
+    (this.snapPass.material as THREE.ShaderMaterial).uniforms.uState.value = this.curState.texture;
+    this.renderTo(this.snapPass, this.rtSnap);
+    this.renderer.readRenderTargetPixels(this.rtSnap, 0, 0, SNAP_W, SNAP_H, this.snapReadBuf);
+    const copy = new Float32Array(this.snapReadBuf);
+    this.snaps.push({ t: this.simTime, data: copy });
+    if (this.snaps.length > SNAP_MAX) this.snaps.shift();
+  }
+
+  get snapCount(): number {
+    return this.snaps.length;
+  }
+
+  get snapTimes(): number[] {
+    return this.snaps.map((s) => s.t);
+  }
+
+  get isScrubbing(): boolean {
+    return this.scrubbing;
+  }
+
+  scrubTo(idx: number): boolean {
+    if (idx < 0 || idx >= this.snaps.length) return false;
+    const snap = this.snaps[idx];
+    // upload snapshot as a texture and restore into both state RTs + eta
+    const tex = new THREE.DataTexture(snap.data, SNAP_W, SNAP_H, THREE.RGBAFormat, THREE.FloatType);
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    const cu = (this.copyPass.material as THREE.ShaderMaterial).uniforms;
+    cu.uInit.value = tex;
+    this.renderTo(this.copyPass, this.rtStateA);
+    this.renderTo(this.copyPass, this.rtStateB);
+    this.renderTo(this.copyPass, this.rtEta);
+    tex.dispose();
+    this.simTime = snap.t;
+    this.scrubbing = true;
+    this.waterMat.uniforms.uState.value = this.curState.texture;
+    return true;
+  }
+
+  exitScrub(): void {
+    this.scrubbing = false;
+    this.paused = false;
+  }
+
   // ================================================================ props update
   private updateProps(dt: number): void {
     const f = this.field;
     const s = this.sample;
 
-    for (const b of this.barrels) {
-      f.sample(b.pos.x, b.pos.z, s);
-      const bed = bedAt(b.pos.x, b.pos.z);
+    for (const fl of this.floaters) {
+      f.sample(fl.pos.x, fl.pos.z, s);
+      const bed = bedAt(fl.pos.x, fl.pos.z);
       const dep = s.eta - bed;
-      if (dep > 0.4) {
-        const bob = Math.sin(this.simTime * 1.7 + b.pos.x) * 0.06;
-        b.pos.y += (s.eta + 0.15 + bob - b.pos.y) * Math.min(1, dt * 5);
-        b.vel.x += (s.u * 0.92 - b.vel.x) * Math.min(1, dt * 2.2);
-        b.vel.z += (s.v * 0.92 - b.vel.z) * Math.min(1, dt * 2.2);
-        b.pos.x += b.vel.x * dt;
-        b.pos.z += b.vel.z * dt;
+      const isBoat = !((fl.mesh as THREE.Mesh).isMesh); // boats are Groups, barrels are Meshes
+      if (dep > 0.35) {
+        const bob = Math.sin(this.simTime * 1.7 + fl.pos.x) * 0.06;
+        fl.pos.y += (s.eta + 0.15 + bob - fl.pos.y) * Math.min(1, dt * 5);
+        const follow = isBoat ? 0.0 : 0.92; // moored boats only bob, don't drift
+        fl.vel.x += (s.u * follow - fl.vel.x) * Math.min(1, dt * 2.2);
+        fl.vel.z += (s.v * follow - fl.vel.z) * Math.min(1, dt * 2.2);
+        fl.pos.x += fl.vel.x * dt;
+        fl.pos.z += fl.vel.z * dt;
       } else {
-        b.vel.multiplyScalar(1 - Math.min(1, dt * 2.5));
-        b.pos.y += (bed + 0.3 - b.pos.y) * Math.min(1, dt * 4);
+        fl.vel.multiplyScalar(1 - Math.min(1, dt * 2.5));
+        fl.pos.y += (bed + 0.3 - fl.pos.y) * Math.min(1, dt * 4);
       }
-      b.pos.x = clamp(b.pos.x, 1, LX - 1);
-      b.pos.z = clamp(b.pos.z, -LZ / 2 + 1, LZ / 2 - 1);
-      const spd = Math.sqrt(b.vel.x * b.vel.x + b.vel.z * b.vel.z);
-      b.mesh.position.copy(b.pos);
-      b.mesh.rotation.x = clamp(b.vel.z * 0.1, -0.5, 0.5) + Math.sin(this.simTime * 2.1 + b.pos.z) * 0.04;
-      b.mesh.rotation.z = clamp(-b.vel.x * 0.1, -0.5, 0.5);
-      b.mesh.rotation.y += (0.2 + spd * 0.3) * dt;
+      fl.pos.x = clamp(fl.pos.x, 1, LX - 1);
+      fl.pos.z = clamp(fl.pos.z, -LZ / 2 + 1, LZ / 2 - 1);
+      const spd = Math.sqrt(fl.vel.x * fl.vel.x + fl.vel.z * fl.vel.z);
+      fl.mesh.position.copy(fl.pos);
+      fl.mesh.rotation.x = clamp(fl.vel.z * 0.1, -0.5, 0.5) + Math.sin(this.simTime * 2.1 + fl.pos.z) * 0.04;
+      fl.mesh.rotation.z = clamp(-fl.vel.x * 0.1, -0.5, 0.5);
+      if (!isBoat) fl.mesh.rotation.y += (0.2 + spd * 0.3) * dt;
     }
 
     for (const h of this.houses) {
@@ -788,45 +1115,101 @@ export class DamSim {
       }
       if (c.mesh.position.x > LX - 1) c.active = false;
     }
+
+    // keep the algal stain band near the waterline
+    this.dam.stainBand.position.y = this.lastLevel - 0.6;
   }
 
   // ================================================================ stats
   private computeStats(): DamStats {
     const d = this.field.data;
     const dzC = LZ / DOWN_H;
-    const gx = 37;
-    let q = 0;
-    let stage = 0;
-    let froude = 0;
-    for (let j = 0; j < DOWN_H; j++) {
-      const k = (j * DOWN_W + gx) * 4;
-      const h = Math.max(d[k + 3], 0);
-      const u = d[k + 1];
-      q += u * h * dzC;
-      stage = Math.max(stage, h);
-      if (h > 0.05) {
-        froude = Math.max(froude, Math.abs(u) / Math.sqrt(this.gravity * h));
-      }
-    }
+    const gauges: GaugeStat[] = [];
     let vmax = 0;
     let level = 0;
+    let floodedCells = 0;
     for (let i = 0; i < DOWN_W * DOWN_H; i++) {
       const k = i * 4;
       const sp = Math.sqrt(d[k + 1] * d[k + 1] + d[k + 2] * d[k + 2]);
       vmax = Math.max(vmax, sp);
-      if (i % DOWN_W < 18 && d[k + 3] > 0.1) level = Math.max(level, d[k]);
+      const col = i % DOWN_W;
+      // reservoir pool level: deepest wet cells (depth > 0.5 m) so shelf puddles
+      // cannot distort the stage reading
+      if (col < 26 && d[k + 3] > 0.5) level = Math.max(level, d[k]);
+      if (d[k + 3] > 0.12) floodedCells++;
     }
-    if (q > this.qPeak) this.qPeak = q;
+    // gauges
+    for (let gi = 0; gi < GAUGES.length; gi++) {
+      const g = GAUGES[gi];
+      const gx = clamp(Math.round((g.x / LX) * DOWN_W), 1, DOWN_W - 2);
+      let q = 0;
+      let stage = 0;
+      let gv = 0;
+      let froude = 0;
+      for (let j = 0; j < DOWN_H; j++) {
+        const k = (j * DOWN_W + gx) * 4;
+        const h = Math.max(d[k + 3], 0);
+        const u = d[k + 1];
+        const v = d[k + 2];
+        q += u * h * dzC;
+        stage = Math.max(stage, h);
+        gv = Math.max(gv, Math.sqrt(u * u + v * v));
+        if (h > 0.05) froude = Math.max(froude, Math.abs(u) / Math.sqrt(this.gravity * h));
+      }
+      q = Math.max(q, 0);
+      if (q > this.gaugePeaks[gi]) this.gaugePeaks[gi] = q;
+      if (this.gaugeArr[gi] === null && stage > 0.2 && g.x > DAM_X) this.gaugeArr[gi] = this.simTime;
+      gauges.push({
+        id: g.id,
+        label: g.label,
+        q,
+        qPeak: this.gaugePeaks[gi],
+        depth: stage,
+        vel: gv,
+        arrivalMin: this.gaugeArr[gi] !== null ? this.gaugeArr[gi]! * this.damProfile.timeMinPerSec : null,
+        distKm: (g.x - DAM_X) * this.damProfile.lenScale / 1000,
+      });
+    }
+    const frG = gauges[0] ? gauges[0].q : 0;
+    if (frG > this.qPeak) this.qPeak = frG;
+
+    // level rate of rise (demo m/s, ema over stats ticks)
+    const dtSimS = this.simTime - this.lastStatSimT;
+    const riseMs = dtSimS > 0.05 && this.lastStatSimT > 0
+      ? Math.max((level - this.lastLevel) / dtSimS, -2)
+      : 0;
+    this.levelRise = this.levelRise * 0.7 + riseMs * 0.3;
+    this.lastStatSimT = this.simTime;
+    this.lastLevel = level;
+
+    // scenario progress + stage
+    let progress01 = 0;
+    let stage = 0;
+    if (this.scenario) {
+      const tau = this.breachTau || 15;
+      const breachDone = this.breachDepth01;
+      const floodT = clamp((this.scenT - tau) / 55, 0, 1);
+      progress01 = clamp(0.12 * clamp(this.scenT / 4, 0, 1) + 0.38 * breachDone + 0.42 * floodT + 0.08 * clamp(floodT * 1.2, 0, 1), 0, 1);
+      stage = this.scenT < 2 ? 1 : breachDone <= 0 ? 2 : breachDone < 0.98 ? 3 : floodT < 1 ? 4 : 5;
+    }
+
     return {
       t: this.simTime,
-      q: Math.max(q, 0),
-      qPeak: this.qPeak,
+      realMin: this.simTime * this.damProfile.timeMinPerSec,
       level,
+      levelFrac: simLevelToFrac(level),
+      riseMPerHr: this.levelRise * (60 / this.damProfile.timeMinPerSec),
       vmax,
-      froude,
+      froude: gauges[0]?.froude ?? 0,
       fps: this.fpsEma,
-      phase: this.phase,
-      overtopping: this.overtopping,
+      phase: this.scrubbing ? 'scrub' : this.scenario ? 'scenario' : 'live',
+      scenarioActive: !!this.scenario,
+      breach01: this.breachDepth01,
+      progress01,
+      stage,
+      gauges,
+      floodedCells,
+      qOut: gauges[0]?.q ?? 0,
     };
   }
 
@@ -858,6 +1241,8 @@ export class DamSim {
       dam: [new THREE.Vector3(76, 27, 52), new THREE.Vector3(114, 17, 0)],
       valley: [new THREE.Vector3(178, 9, 46), new THREE.Vector3(118, 10, -2)],
       top: [new THREE.Vector3(96, 195, 0.01), new THREE.Vector3(96, 0, 0)],
+      reservoir: [new THREE.Vector3(74, 34, 44), new THREE.Vector3(20, 14, 0)],
+      impact: [new THREE.Vector3(168, 105, 96), new THREE.Vector3(148, 2, 0)],
     };
     const [pos, tgt] = P[preset];
     this.tweenFrom.copy(this.camera.position);
@@ -867,13 +1252,87 @@ export class DamSim {
     this.tweenT = 0;
   }
 
+  focusOn(x: number, z: number, dist = 26): void {
+    const ground = bedAt(x, z);
+    this.tweenFrom.copy(this.camera.position);
+    this.tweenFromT.copy(this.controls.target);
+    this.tweenTo.set(x - dist * 0.55, ground + dist * 0.42, z + dist * 0.75);
+    this.tweenToT.set(x, ground + 2, z);
+    this.tweenT = 0;
+  }
+
+  // ================================================================ evac route
+  drawEvacRoute(pts: [number, number][]): void {
+    const geo = new THREE.BufferGeometry().setFromPoints(
+      pts.map(([x, z]) => new THREE.Vector3(x, bedAt(x, z) + 1.6, z)),
+    );
+    if (this.evacLine) {
+      this.scene.remove(this.evacLine);
+      this.evacLine.geometry.dispose();
+    }
+    const mat = new THREE.LineDashedMaterial({
+      color: 0x34e0a1,
+      dashSize: 2.2,
+      gapSize: 1.4,
+      linewidth: 2,
+    });
+    this.evacLine = new THREE.Line(geo, mat);
+    this.evacLine.computeLineDistances();
+    this.scene.add(this.evacLine);
+  }
+
+  clearEvacRoute(): void {
+    if (this.evacLine) {
+      this.scene.remove(this.evacLine);
+      this.evacLine.geometry.dispose();
+      this.evacLine = null;
+    }
+  }
+
   // ================================================================ public API
+  get profile(): DamProfile {
+    return this.damProfile;
+  }
+
+  getDownsample(): { data: Float32Array; w: number; h: number; arr: Float32Array } {
+    return { data: this.field.data, w: DOWN_W, h: DOWN_H, arr: this.arr };
+  }
+
+  setDam(id: DamId, levelFrac: number): void {
+    this.damProfile = DAMS[id];
+    this.liveFrac = clamp(levelFrac, 0, 1);
+    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+    eu.uDriveEta.value = fracToSimLevel(this.liveFrac);
+    eu.uDriveOn.value = 1;
+  }
+
+  setLiveLevel(frac: number): void {
+    this.liveFrac = clamp(frac, 0, 1);
+    if (!this.scenario) {
+      const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+      eu.uDriveEta.value = fracToSimLevel(this.liveFrac);
+      eu.uDriveOn.value = 1;
+    }
+  }
+
   setTimeScale(v: number): void { this.timeScale = v; }
   setPaused(b: boolean): void { this.paused = b; }
   setGravity(g: number): void { this.gravity = g; }
-  setInflow(q: number): void { this.inflowQ = q; }
   setBreachRate(v: number): void { this.breachRate = v; }
-  setSpeedMap(b: boolean): void { this.waterMat.uniforms.uShowSpeed.value = b ? 1 : 0; }
+  setSpeedMap(b: boolean): void {
+    this.showSpeed = b;
+    this.waterMat.uniforms.uShowSpeed.value = b ? 1 : 0;
+  }
+  setLayer(m: LayerMode): void {
+    this.layerMode = m;
+    this.waterMat.uniforms.uLayerMode.value = m;
+  }
+  setHd(b: boolean): void { this.bloomPass.enabled = b; }
+  setInfraVisible(b: boolean): void {
+    this.scene.traverse((o) => {
+      if (o.userData && (o.userData as { infra?: boolean }).infra) o.visible = b;
+    });
+  }
   setFoam(b: boolean): void {
     this.foamOn = b;
     if (!b) {
@@ -907,6 +1366,7 @@ export class DamSim {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    this.composer.setSize(w, h);
     this.sprayMat.uniforms.uPixelRatio.value = this.renderer.getPixelRatio();
   }
 
@@ -923,10 +1383,11 @@ export class DamSim {
       else if (mat) mat.dispose();
     });
     [this.rtStateA, this.rtStateB, this.rtEta, this.rtFoamA, this.rtFoamB,
-      this.rtSprayA, this.rtSprayB, this.rtDown].forEach((rt) => rt.dispose());
-    [this.etaPass, this.velPass, this.foamPass, this.sprayPass, this.copyPass, this.downPass]
+      this.rtSprayA, this.rtSprayB, this.rtDown, this.rtSnap].forEach((rt) => rt.dispose());
+    [this.etaPass, this.velPass, this.foamPass, this.sprayPass, this.copyPass, this.downPass, this.snapPass]
       .forEach((q) => q.dispose());
-    [this.texBed, this.texStruct, this.texInit, this.texSprayInit, this.texBlack].forEach((t) => t.dispose());
+    [this.texBed, this.texStruct, this.texInit, this.texSprayInit, this.texBlack, this.texArr].forEach((t) => t.dispose());
+    this.composer.dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement === this.container) {
       this.container.removeChild(this.renderer.domElement);
