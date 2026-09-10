@@ -380,6 +380,7 @@ uniform vec3 uCamPos;
 uniform float uShowSpeed;
 uniform float uLayerMode;    // 0 natural, 1 depth, 2 velocity, 3 arrival
 uniform float uTime;
+uniform float uRain;         // 0..1 storm intensity (rain choppiness + glare damp)
 uniform vec3 uFogColor;
 uniform float uFogNear;
 uniform float uFogFar;
@@ -463,18 +464,23 @@ void main() {
   vec2 vel = st.yz;
   float speed = length(vel);
 
-  // animated micro-ripples, advected by the flow for a live look
+  // animated micro-ripples, advected by the flow for a live look.
+  // rain stitches the surface with extra high-frequency dapple.
   vec2 flowOff = vel * uTime * 0.55;
   float n1 = vnoise(vWorld.xz * 0.9 + vec2(uTime * 0.7, uTime * 0.45) + flowOff * 0.35);
   float n2 = vnoise(vWorld.xz * 2.6 - vec2(uTime * 1.1, uTime * 0.8) + flowOff);
   float n3 = vnoise(vWorld.xz * 6.5 + vec2(uTime * 1.9, -uTime * 1.4));
-  vec3 rip = vec3(n1 - 0.5, 0.0, n2 - 0.5) * 0.055 + vec3(n3 - 0.5, 0.0, n1 - 0.5) * 0.022;
+  float n4 = vnoise(vWorld.xz * 14.0 + vec2(uTime * 3.4, uTime * 2.7));
+  vec3 rip = vec3(n1 - 0.5, 0.0, n2 - 0.5) * (0.055 * (1.0 + uRain * 1.3))
+           + vec3(n3 - 0.5, 0.0, n1 - 0.5) * (0.022 * (1.0 + uRain * 2.0))
+           + vec3(n4 - 0.5, 0.0, n3 - 0.5) * (0.05 * uRain);
   N = normalize(N + rip);
 
   vec3 V = normalize(uCamPos - vWorld);
   vec3 R = reflect(-V, N);
   R.y = abs(R.y) + 0.02;
   vec3 sky = skyColor(normalize(R)) * vec3(0.82, 0.93, 1.12) * 1.05; // blue-shifted sky reflection
+  sky *= 1.0 - 0.35 * uRain; // overcast dims reflected sky
 
   float fres = 0.03 + 0.85 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
 
@@ -488,9 +494,9 @@ void main() {
   float shore = smoothstep(0.30, 0.03, depth) * 0.30;
   body = mix(body, vec3(0.90, 0.94, 0.97), clamp(foam, 0.0, 1.0) * 0.85 + shore);
 
-  // sun specular: tight glitter + broad gloss
+  // sun specular: tight glitter + broad gloss (damped under overcast)
   vec3 H = normalize(uSunDir + V);
-  float spec = pow(max(dot(N, H), 0.0), 220.0) * 3.2 + pow(max(dot(N, H), 0.0), 24.0) * 0.16;
+  float spec = (pow(max(dot(N, H), 0.0), 220.0) * 3.2 + pow(max(dot(N, H), 0.0), 24.0) * 0.16) * (1.0 - 0.6 * uRain);
 
   vec3 col = mix(body, sky, clamp(fres, 0.0, 1.0)) + uSunColor * spec * (1.0 - 0.6 * foam);
 

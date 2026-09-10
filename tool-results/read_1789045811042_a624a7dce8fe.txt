@@ -1,0 +1,881 @@
+     1→'use client';
+     2→
+     3→import { useEffect, useRef } from 'react';
+     4→import { Button } from '@/components/ui/button';
+     5→import { Slider } from '@/components/ui/slider';
+     6→import { Switch } from '@/components/ui/switch';
+     7→import {
+     8→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+     9→} from '@/components/ui/select';
+    10→import { Input } from '@/components/ui/input';
+    11→import {
+    12→  RadioGroup, RadioGroupItem,
+    13→} from '@/components/ui/radio-group';
+    14→import type { GaugeStat, CamPreset } from '@/lib/dam/engine';
+    15→import type { ImpactResult, EvacPlan, RiskResult, ForecastPoint } from '@/lib/damsafe/analysis';
+    16→import {
+    17→  DAMS, fmtRealTime, MECHANISM_LABEL, RAIN_FACTORS,
+    18→  simToRealLevel, storagePercent,
+    19→  type BreachLocation, type DamId, type FailureMechanism, type RainScenario,
+    20→} from '@/lib/damsafe/config';
+    21→import { Bar, Chip, KPI, LevelTag, Panel, Row, SectionTitle } from './ui';
+    22→import {
+    23→  AlertTriangle, CheckCircle2, Play, Pause, RotateCcw, Radio, Satellite, Database, Cpu,
+    24→} from 'lucide-react';
+    25→
+    26→export interface UIStats {
+    27→  t: number;
+    28→  realMin: number;
+    29→  level: number;
+    30→  levelFrac: number;
+    31→  vmax: number;
+    32→  froude: number;
+    33→  fps: number;
+    34→  phase: 'live' | 'scenario' | 'scrub';
+    35→  scenarioActive: boolean;
+    36→  breach01: number;
+    37→  progress01: number;
+    38→  stage: number;
+    39→  gauges: GaugeStat[];
+    40→  floodedCells: number;
+    41→  qOut: number;
+    42→}
+    43→
+    44→export type TabId = 'command' | 'twin' | 'scenarios' | 'impact' | 'evac' | 'data';
+    45→
+    46→export const TABS: { id: TabId; label: string }[] = [
+    47→  { id: 'command', label: 'Command Center' },
+    48→  { id: 'twin', label: 'Digital Twin' },
+    49→  { id: 'scenarios', label: 'Scenarios' },
+    50→  { id: 'impact', label: 'Flood Impact' },
+    51→  { id: 'evac', label: 'Evacuation' },
+    52→  { id: 'data', label: 'Data & Validation' },
+    53→];
+    54→
+    55→// ============================================================ top bar
+    56→export function TopBar({
+    57→  damId, onDam, mode, onMode, tab, onTab,
+    58→}: {
+    59→  damId: DamId;
+    60→  onDam: (d: DamId) => void;
+    61→  mode: 'live' | 'scenario';
+    62→  onMode: (m: 'live' | 'scenario') => void;
+    63→  tab: TabId;
+    64→  onTab: (t: TabId) => void;
+    65→}) {
+    66→  return (
+    67→    <div className="pointer-events-auto absolute left-2 right-2 top-2 z-30 rounded-lg border border-cyan-100/10 bg-[#0a1526]/92 shadow-2xl backdrop-blur-md">
+    68→      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2">
+    69→        <div className="flex items-center gap-2">
+    70→          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-gradient-to-br from-cyan-500 to-blue-700 font-black text-white">D</div>
+    71→          <div className="leading-tight">
+    72→            <p className="text-[13px] font-bold tracking-wide text-white">DAMSAFE 3D</p>
+    73→            <p className="hidden text-[8.5px] tracking-[0.14em] text-cyan-200/60 sm:block">REAL-TIME DAM RISK &amp; FLOOD DIGITAL TWIN</p>
+    74→          </div>
+    75→        </div>
+    76→        <div className="mx-1 hidden h-7 w-px bg-white/10 sm:block" />
+    77→        <Select value={damId} onValueChange={(v) => onDam(v as DamId)}>
+    78→          <SelectTrigger className="h-8 w-[150px] border-white/10 bg-white/5 text-xs sm:w-[168px]" aria-label="Select dam">
+    79→            <SelectValue />
+    80→          </SelectTrigger>
+    81→          <SelectContent>
+    82→            {(Object.keys(DAMS) as DamId[]).map((id) => (
+    83→              <SelectItem key={id} value={id}>{DAMS[id].name} · {DAMS[id].damType.split('(')[0]}</SelectItem>
+    84→            ))}
+    85→          </SelectContent>
+    86→        </Select>
+    87→        <RadioGroup
+    88→          value={mode}
+    89→          onValueChange={(v) => onMode(v as 'live' | 'scenario')}
+    90→          className="flex items-center gap-3"
+    91→        >
+    92→          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-300">
+    93→            <RadioGroupItem value="live" className="h-3.5 w-3.5 border-emerald-400 text-emerald-400" />
+    94→            Live monitoring
+    95→          </label>
+    96→          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-300">
+    97→            <RadioGroupItem value="scenario" className="h-3.5 w-3.5 border-amber-400 text-amber-400" />
+    98→            What-if scenario
+    99→          </label>
+   100→        </RadioGroup>
+   101→        <div className="ml-auto hidden items-center gap-2 md:flex">
+   102→          <Chip kind="simulated">SIMULATED DATA</Chip>
+   103→          <span className="flex items-center gap-1.5 text-[10px] text-emerald-300">
+   104→            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+   105→            SYSTEM ONLINE
+   106→          </span>
+   107→        </div>
+   108→      </div>
+   109→      <div className="flex gap-1 overflow-x-auto border-t border-white/5 px-2 py-1 damsafe-scroll">
+   110→        {TABS.map((t) => (
+   111→          <button
+   112→            key={t.id}
+   113→            onClick={() => onTab(t.id)}
+   114→            className={`shrink-0 rounded px-2.5 py-1 text-[10.5px] font-medium tracking-wide transition-colors ${
+   115→              tab === t.id
+   116→                ? 'bg-cyan-500/15 text-cyan-200 shadow-[inset_0_-2px_0_0_rgba(34,211,238,0.6)]'
+   117→                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+   118→            }`}
+   119→          >
+   120→            {t.label.toUpperCase()}
+   121→          </button>
+   122→        ))}
+   123→      </div>
+   124→    </div>
+   125→  );
+   126→}
+   127→
+   128→// ============================================================ hydrograph canvas
+   129→export function Hydrograph({
+   130→  data, peak, curT,
+   131→}: {
+   132→  data: { t: number; q: number }[];
+   133→  peak: number;
+   134→  curT: number;
+   135→}) {
+   136→  const ref = useRef<HTMLCanvasElement>(null);
+   137→  useEffect(() => {
+   138→    const c = ref.current;
+   139→    if (!c) return;
+   140→    const dpr = window.devicePixelRatio || 1;
+   141→    const W = c.clientWidth || 262;
+   142→    const H = c.clientHeight || 96;
+   143→    c.width = W * dpr;
+   144→    c.height = H * dpr;
+   145→    const ctx = c.getContext('2d');
+   146→    if (!ctx) return;
+   147→    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+   148→    ctx.clearRect(0, 0, W, H);
+   149→    const padL = 2, padR = 2, padT = 6, padB = 13;
+   150→    const maxQ = Math.max(peak, 300);
+   151→    const t1 = Math.max(data.length ? data[data.length - 1].t : 20, 20);
+   152→    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+   153→    for (let i = 1; i < 4; i++) {
+   154→      const y = padT + ((H - padT - padB) * i) / 4;
+   155→      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+   156→    }
+   157→    if (data.length > 1) {
+   158→      const X = (t: number) => padL + (t / t1) * (W - padL - padR);
+   159→      const Y = (q: number) => H - padB - (Math.min(q, maxQ) / maxQ) * (H - padT - padB);
+   160→      ctx.beginPath();
+   161→      data.forEach((p, i) => (i === 0 ? ctx.moveTo(X(p.t), Y(p.q)) : ctx.lineTo(X(p.t), Y(p.q))));
+   162→      ctx.lineTo(X(data[data.length - 1].t), H - padB);
+   163→      ctx.lineTo(X(data[0].t), H - padB);
+   164→      ctx.closePath();
+   165→      ctx.fillStyle = 'rgba(34,211,238,0.12)';
+   166→      ctx.fill();
+   167→      ctx.beginPath();
+   168→      data.forEach((p, i) => (i === 0 ? ctx.moveTo(X(p.t), Y(p.q)) : ctx.lineTo(X(p.t), Y(p.q))));
+   169→      ctx.strokeStyle = '#22d3ee';
+   170→      ctx.lineWidth = 1.5;
+   171→      ctx.stroke();
+   172→      const pk = data.reduce((a, b) => (b.q > a.q ? b : a), data[0]);
+   173→      if (pk.q > 50) {
+   174→        ctx.fillStyle = '#fbbf24';
+   175→        ctx.beginPath(); ctx.arc(X(pk.t), Y(pk.q), 2.4, 0, Math.PI * 2); ctx.fill();
+   176→      }
+   177→    }
+   178→    // current time cursor
+   179→    if (curT > 0 && curT <= t1) {
+   180→      const x = padL + (curT / t1) * (W - padL - padR);
+   181→      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+   182→      ctx.setLineDash([3, 3]);
+   183→      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, H - padB); ctx.stroke();
+   184→      ctx.setLineDash([]);
+   185→    }
+   186→    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+   187→    ctx.font = '9px ui-monospace, monospace';
+   188→    ctx.fillText('0', padL, H - 2);
+   189→    const tl = `${Math.round(t1)} s`;
+   190→    ctx.fillText(tl, W - padR - ctx.measureText(tl).width, H - 2);
+   191→    ctx.fillText(`${Math.round(maxQ)} m³/s`, padL + 2, padT + 7);
+   192→  }, [data, peak, curT]);
+   193→  return <canvas ref={ref} className="h-[96px] w-full" />;
+   194→}
+   195→
+   196→// ============================================================ right: gauges + alerts
+   197→export function GaugesPanel({
+   198→  stats, hydro, gaugeIdx, onGauge, risk, damId,
+   199→}: {
+   200→  stats: UIStats | null;
+   201→  hydro: { t: number; q: number }[];
+   202→  gaugeIdx: number;
+   203→  onGauge: (i: number) => void;
+   204→  risk: RiskResult | null;
+   205→  damId: DamId;
+   206→}) {
+   207→  const g = stats?.gauges[gaugeIdx];
+   208→  const phaseChip = stats?.phase === 'scrub'
+   209→    ? <Chip kind="historical">HISTORICAL</Chip>
+   210→    : stats?.scenarioActive
+   211→      ? <Chip kind="crit">SIMULATED SCENARIO</Chip>
+   212→      : <Chip kind="live">LIVE</Chip>;
+   213→  return (
+   214→    <div className="flex flex-col gap-2">
+   215→      <Panel
+   216→        title="Gauge network"
+   217→        right={phaseChip}
+   218→      >
+   219→        <div className="mb-2 grid grid-cols-4 gap-1">
+   220→          {stats?.gauges.map((gg, i) => (
+   221→            <button
+   222→              key={gg.id}
+   223→              onClick={() => onGauge(i)}
+   224→              className={`rounded border px-1 py-0.5 text-[9px] font-semibold tracking-wide ${
+   225→                i === gaugeIdx ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-200' : 'border-white/10 bg-white/[0.03] text-slate-400 hover:text-slate-200'
+   226→              }`}
+   227→            >
+   228→              {gg.id}
+   229→            </button>
+   230→          ))}
+   231→        </div>
+   232→        {g && (
+   233→          <>
+   234→            <p className="mb-1 text-[10px] text-slate-400">
+   235→              {g.id} · {g.label} · {(g.distKm).toFixed(1)} km {DAMS[damId].name === 'Idukki' ? '' : ''}downstream
+   236→            </p>
+   237→            <Row k="Discharge" v={`${Math.round(g.q).toLocaleString('en-IN')} m³/s`} />
+   238→            <Row k="Peak discharge" v={`${Math.round(g.qPeak).toLocaleString('en-IN')} m³/s`} />
+   239→            <Row k="Water depth" v={`${g.depth.toFixed(2)} m`} />
+   240→            <Row k="Velocity" v={`${g.vel.toFixed(1)} m/s`} />
+   241→            <Row k="Flood arrival" v={g.arrivalMin !== null ? fmtRealTime(g.arrivalMin) : 'not arrived'} accent={g.arrivalMin !== null ? 'text-amber-300' : 'text-slate-400'} />
+   242→            <div className="mt-2 rounded border border-white/5 bg-black/30 p-1">
+   243→              <p className="px-1 pb-0.5 text-[8.5px] tracking-[0.14em] text-slate-500">FLOOD HYDROGRAPH · DISCHARGE VS TIME</p>
+   244→              <Hydrograph data={hydro} peak={g.qPeak} curT={stats?.t ?? 0} />
+   245→            </div>
+   246→          </>
+   247→        )}
+   248→        {!g && <p className="text-[10px] text-slate-500">Waiting for solver…</p>}
+   249→      </Panel>
+   250→
+   251→      <Panel title="Alerts">
+   252→        <div className="flex flex-col gap-1.5">
+   253→          {risk && risk.status !== 'LOW' && (
+   254→            <AlertLine kind="warn" text={`Reservoir risk ${risk.status} — score ${risk.score}/100`} />
+   255→          )}
+   256→          {stats && stats.breach01 > 0.02 && stats.breach01 < 1 && (
+   257→            <AlertLine kind="crit" text={`CRITICAL SCENARIO — breach forming (${Math.round(stats.breach01 * 100)}%)`} />
+   258→          )}
+   259→          {stats && stats.breach01 >= 1 && (
+   260→            <AlertLine kind="crit" text="Breach fully formed — flood wave propagating downstream" />
+   261→          )}
+   262→          {stats && stats.gauges.some((gg) => gg.vel > 6) && (
+   263→            <AlertLine kind="warn" text={`High velocity ${Math.max(...stats.gauges.map((x) => x.vel)).toFixed(1)} m/s — danger to life in channel`} />
+   264→          )}
+   265→          {(!risk || risk.status === 'LOW') && (!stats || stats.breach01 <= 0.02) && (
+   266→            <AlertLine kind="ok" text="Reservoir conditions normal — no active warnings" />
+   267→          )}
+   268→          <p className="mt-1 text-[8.5px] leading-relaxed text-slate-500">
+   269→            Prototype alerts · not official government warnings
+   270→          </p>
+   271→        </div>
+   272→      </Panel>
+   273→    </div>
+   274→  );
+   275→}
+   276→
+   277→function AlertLine({ kind, text }: { kind: 'ok' | 'warn' | 'crit'; text: string }) {
+   278→  const map = {
+   279→    ok: { icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />, cls: 'text-slate-300' },
+   280→    warn: { icon: <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />, cls: 'text-amber-200' },
+   281→    crit: { icon: <AlertTriangle className="h-3.5 w-3.5 animate-pulse text-red-400" />, cls: 'text-red-200' },
+   282→  };
+   283→  return (
+   284→    <div className={`flex items-start gap-1.5 text-[10.5px] leading-snug ${map[kind].cls}`}>
+   285→      {map[kind].icon}
+   286→      <span>{text}</span>
+   287→    </div>
+   288→  );
+   289→}
+   290→
+   291→// ============================================================ command center
+   292→export function CommandCenter({
+   293→  damId, stats, liveFrac, onLevel, risk, forecast,
+   294→}: {
+   295→  damId: DamId;
+   296→  stats: UIStats | null;
+   297→  liveFrac: number;
+   298→  onLevel: (f: number) => void;
+   299→  risk: RiskResult | null;
+   300→  forecast: ForecastPoint[];
+   301→}) {
+   302→  const dam = DAMS[damId];
+   303→  const realLevel = simToRealLevel(dam, stats?.level ?? 15.2 + liveFrac * 7.5);
+   304→  const storage = storagePercent(liveFrac);
+   305→  const inflow = Math.round(8 * dam.qScale); // base river inflow (demo 8 m³/s × dam scale)
+   306→  const rise = risk?.factors.find((f) => f.key === 'rise')?.note ?? '';
+   307→  return (
+   308→    <div className="flex flex-col gap-2">
+   309→      <Panel title="Reservoir conditions" right={<Chip kind="live">LIVE</Chip>}>
+   310→        <div className="grid grid-cols-2 gap-1.5">
+   311→          <KPI label="Water level" value={realLevel.toFixed(1)} unit="m" sub="elevation a.s.l." />
+   312→          <KPI label="Storage" value={`${storage}`} unit="%" sub={`${dam.grossStorageMm3.toLocaleString()} Mm³ gross`} tone={storage > 90 ? 'amber' : 'cyan'} />
+   313→          <KPI label="Inflow" value={inflow.toLocaleString('en-IN')} unit="m³/s" />
+   314→          <KPI label="Outflow" value={Math.round((stats?.qOut ?? 0) * dam.qScale).toLocaleString('en-IN')} unit="m³/s" />
+   315→        </div>
+   316→        <div className="mt-2.5">
+   317→          <div className="mb-1 flex items-center justify-between text-[10px] text-slate-400">
+   318→            <span>RESERVOIR LEVEL SLIDER</span>
+   319→            <span className="font-mono text-cyan-300">{realLevel.toFixed(1)} m · {(liveFrac * 100).toFixed(0)}%</span>
+   320→          </div>
+   321→          <Slider
+   322→            value={[liveFrac]}
+   323→            min={0.05}
+   324→            max={1}
+   325→            step={0.01}
+   326→            onValueChange={([v]) => onLevel(v)}
+   327→            aria-label="Reservoir level"
+   328→          />
+   329→          <div className="mt-0.5 flex justify-between text-[8.5px] text-slate-500">
+   330→            <span>Minimum drawdown {dam.minDrawdownM.toFixed(0)} m</span>
+   331→            <span>FRL {dam.frlM.toFixed(1)} m</span>
+   332→          </div>
+   333→        </div>
+   334→        <div className="mt-2 grid grid-cols-2 gap-1.5">
+   335→          <KPI label="Rate of rise" value={rise.startsWith('+') ? rise.replace(' m/hr', '') : '0.00'} unit="m/hr" tone={rise.startsWith('+') ? 'amber' : 'cyan'} />
+   336→          <KPI label="3D sync" value={`${((stats?.level ?? 0)).toFixed(1)} m`} sub="digital twin surface" tone="slate" />
+   337→        </div>
+   338→      </Panel>
+   339→
+   340→      <Panel title="Water level forecast" right={<Chip kind="forecast">FORECAST</Chip>}>
+   341→        {forecast.map((f) => (
+   342→          <Row
+   343→            key={f.label}
+   344→            k={f.label}
+   345→            v={`${f.realLevel.toFixed(1)} m ${f.delta >= 0 ? '▲' : '▼'}${Math.abs(f.delta).toFixed(2)}`}
+   346→            accent={f.delta > 0.4 ? 'text-amber-300' : 'text-cyan-300'}
+   347→          />
+   348→        ))}
+   349→        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+   350→          Water-balance prototype (inflow − outflow over the area curve). Architecture ready for
+   351→          Random Forest / XGBoost / LSTM replacement — no deep learning without training data.
+   352→        </p>
+   353→      </Panel>
+   354→
+   355→      <Panel title="Risk assessment" right={risk ? <Chip kind={risk.status === 'LOW' ? 'ok' : risk.status === 'EXTREME' ? 'crit' : 'warn'}>{risk.status}</Chip> : undefined}>
+   356→        {risk && (
+   357→          <>
+   358→            <div className="mb-2 flex items-end gap-2">
+   359→              <span className={`font-mono text-3xl font-bold leading-none ${
+   360→                risk.status === 'EXTREME' ? 'text-red-400' : risk.status === 'HIGH' ? 'text-amber-400' : risk.status === 'MODERATE' ? 'text-yellow-300' : 'text-emerald-400'
+   361→              }`}>{risk.score}</span>
+   362→              <span className="pb-0.5 text-[10px] text-slate-500">/ 100 weighted score</span>
+   363→            </div>
+   364→            <SectionTitle>Risk factors</SectionTitle>
+   365→            <div className="flex flex-col gap-1">
+   366→              {risk.factors.map((f) => (
+   367→                <div key={f.key} className="flex items-center justify-between text-[10.5px]">
+   368→                  <span className="text-slate-300">{f.label}</span>
+   369→                  <LevelTag level={f.level} />
+   370→                </div>
+   371→              ))}
+   372→            </div>
+   373→            {(risk.why.bad.length > 0 || risk.why.ok.length > 0) && (
+   374→              <>
+   375→                <SectionTitle>Why this score?</SectionTitle>
+   376→                <div className="flex flex-col gap-1">
+   377→                  {risk.why.bad.map((b, i) => (
+   378→                    <p key={`b${i}`} className="flex gap-1 text-[10px] leading-snug text-amber-200/90">
+   379→                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-400" />{b}
+   380→                    </p>
+   381→                  ))}
+   382→                  {risk.why.ok.map((b, i) => (
+   383→                    <p key={`g${i}`} className="flex gap-1 text-[10px] leading-snug text-emerald-200/80">
+   384→                      <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />{b}
+   385→                    </p>
+   386→                  ))}
+   387→                </div>
+   388→              </>
+   389→            )}
+   390→          </>
+   391→        )}
+   392→      </Panel>
+   393→    </div>
+   394→  );
+   395→}
+   396→
+   397→// ============================================================ scenarios
+   398→export interface ScenarioForm {
+   399→  levelFrac: number;
+   400→  mechanism: FailureMechanism;
+   401→  breachWidthM: number;
+   402→  formationMin: number;
+   403→  location: BreachLocation;
+   404→  durationMin: number;
+   405→  rain: RainScenario;
+   406→}
+   407→
+   408→export function ScenarioPanel({
+   409→  form, onChange, onRun, onReset, running, stats, damId,
+   410→}: {
+   411→  form: ScenarioForm;
+   412→  onChange: (p: Partial<ScenarioForm>) => void;
+   413→  onRun: () => void;
+   414→  onReset: () => void;
+   415→  running: boolean;
+   416→  stats: UIStats | null;
+   417→  damId: DamId;
+   418→}) {
+   419→  const stages = ['Preparing terrain', 'Loading reservoir', 'Building breach', 'Running hydraulic model', 'Processing flood extent', 'Calculating impacts'];
+   420→  const stageDone = (i: number): 'done' | 'active' | 'todo' => {
+   421→    const s = stats?.stage ?? 0;
+   422→    if (!running) return 'todo';
+   423→    if (i + 1 < s) return 'done';
+   424→    if (i + 1 === s) return 'active';
+   425→    return 'todo';
+   426→  };
+   427→  return (
+   428→    <div className="flex flex-col gap-2">
+   429→      <Panel title="Failure scenario (assumed)" right={<Chip kind="simulated">WHAT-IF</Chip>}>
+   430→        <SectionTitle>Failure mechanism</SectionTitle>
+   431→        <RadioGroup value={form.mechanism} onValueChange={(v) => onChange({ mechanism: v as FailureMechanism })} className="gap-2">
+   432→          {(['overtopping', 'piping', 'structural'] as FailureMechanism[]).map((m) => (
+   433→            <label key={m} className="flex cursor-pointer items-start gap-2 text-[11px] text-slate-300">
+   434→              <RadioGroupItem value={m} className="mt-0.5 h-3.5 w-3.5" />
+   435→              <span>
+   436→                <span className="font-medium capitalize">{m === 'piping' ? 'Piping / internal erosion' : m}</span>
+   437→                <span className="block text-[9px] leading-tight text-slate-500">{MECHANISM_LABEL[m]}</span>
+   438→              </span>
+   439→            </label>
+   440→          ))}
+   441→        </RadioGroup>
+   442→
+   443→        <div className="mt-3">
+   444→          <div className="mb-1 flex justify-between text-[10px] text-slate-400">
+   445→            <span>INITIAL RESERVOIR LEVEL</span>
+   446→            <span className="font-mono text-cyan-300">{simToRealLevel(DAMS[damId], 15.2 + form.levelFrac * 7.5).toFixed(0)} m eq.</span>
+   447→          </div>
+   448→          <Slider value={[form.levelFrac]} min={0.3} max={1.12} step={0.01} onValueChange={([v]) => onChange({ levelFrac: v })} aria-label="Scenario reservoir level" />
+   449→        </div>
+   450→        <div className="mt-2.5">
+   451→          <div className="mb-1 flex justify-between text-[10px] text-slate-400">
+   452→            <span>BREACH WIDTH</span>
+   453→            <span className="font-mono text-cyan-300">{form.breachWidthM} m</span>
+   454→          </div>
+   455→          <Slider value={[form.breachWidthM]} min={30} max={160} step={10} onValueChange={([v]) => onChange({ breachWidthM: v })} aria-label="Breach width" />
+   456→        </div>
+   457→        <div className="mt-2.5">
+   458→          <div className="mb-1 flex justify-between text-[10px] text-slate-400">
+   459→            <span>BREACH FORMATION TIME</span>
+   460→            <span className="font-mono text-cyan-300">{form.formationMin} min</span>
+   461→          </div>
+   462→          <Slider value={[form.formationMin]} min={10} max={90} step={5} onValueChange={([v]) => onChange({ formationMin: v })} aria-label="Breach formation time" />
+   463→        </div>
+   464→        <div className="mt-2.5 grid grid-cols-2 gap-2">
+   465→          <div>
+   466→            <p className="mb-1 text-[10px] text-slate-400">BREACH LOCATION</p>
+   467→            <Select value={form.location} onValueChange={(v) => onChange({ location: v as BreachLocation })}>
+   468→              <SelectTrigger className="h-7 border-white/10 bg-white/5 text-[11px]"><SelectValue /></SelectTrigger>
+   469→              <SelectContent>
+   470→                <SelectItem value="left">Left abutment</SelectItem>
+   471→                <SelectItem value="center">Center</SelectItem>
+   472→                <SelectItem value="right">Right abutment</SelectItem>
+   473→              </SelectContent>
+   474→            </Select>
+   475→          </div>
+   476→          <div>
+   477→            <p className="mb-1 text-[10px] text-slate-400">RAIN SCENARIO</p>
+   478→            <Select value={form.rain} onValueChange={(v) => onChange({ rain: v as RainScenario })}>
+   479→              <SelectTrigger className="h-7 border-white/10 bg-white/5 text-[11px]"><SelectValue /></SelectTrigger>
+   480→              <SelectContent>
+   481→                {(Object.keys(RAIN_FACTORS) as RainScenario[]).map((r) => (
+   482→                  <SelectItem key={r} value={r}>{RAIN_FACTORS[r].label}</SelectItem>
+   483→                ))}
+   484→              </SelectContent>
+   485→            </Select>
+   486→          </div>
+   487→        </div>
+   488→        <div className="mt-2.5">
+   489→          <div className="mb-1 flex justify-between text-[10px] text-slate-400">
+   490→            <span>SIMULATION DURATION</span>
+   491→            <span className="font-mono text-cyan-300">{form.durationMin} min</span>
+   492→          </div>
+   493→          <Slider value={[form.durationMin]} min={60} max={720} step={60} onValueChange={([v]) => onChange({ durationMin: v })} aria-label="Simulation duration" />
+   494→        </div>
+   495→
+   496→        <Button
+   497→          onClick={onRun}
+   498→          disabled={running}
+   499→          className="mt-3 h-10 w-full bg-gradient-to-r from-red-600 to-amber-500 font-semibold text-white shadow-lg shadow-red-900/40 hover:from-red-500 hover:to-amber-400"
+   500→        >
+   501→          {running ? 'SCENARIO RUNNING…' : 'RUN FAILURE SCENARIO'}
+   502→        </Button>
+   503→        <Button onClick={onReset} variant="ghost" className="mt-1 h-7 w-full text-[11px] text-slate-400 hover:text-slate-100">
+   504→          <RotateCcw className="mr-1.5 h-3 w-3" /> Reset to live monitoring
+   505→        </Button>
+   506→      </Panel>
+   507→
+   508→      {running && (
+   509→        <Panel title="Simulation job" right={<span className="font-mono text-[10px] text-cyan-300">{Math.round((stats?.progress01 ?? 0) * 100)}%</span>}>
+   510→          <div className="mb-2 h-1.5 w-full overflow-hidden rounded bg-white/10">
+   511→            <div className="h-full bg-gradient-to-r from-cyan-500 to-blue-400 transition-all" style={{ width: `${(stats?.progress01 ?? 0) * 100}%` }} />
+   512→          </div>
+   513→          {stages.map((s, i) => {
+   514→            const st = stageDone(i);
+   515→            return (
+   516→              <div key={s} className="flex items-center justify-between py-[2px] text-[10.5px]">
+   517→                <span className={st === 'todo' ? 'text-slate-500' : 'text-slate-300'}>{s}</span>
+   518→                <span className={`font-mono text-[9px] ${st === 'done' ? 'text-emerald-400' : st === 'active' ? 'text-cyan-300' : 'text-slate-600'}`}>
+   519→                  {st === 'done' ? '✓' : st === 'active' ? '···' : ''}
+   520→                </span>
+   521→              </div>
+   522→            );
+   523→          })}
+   524→        </Panel>
+   525→      )}
+   526→    </div>
+   527→  );
+   528→}
+   529→
+   530→// ============================================================ impact
+   531→export function ImpactPanel({
+   532→  impact, damId, onFocus,
+   533→}: {
+   534→  impact: ImpactResult | null;
+   535→  damId: DamId;
+   536→  onFocus: (x: number, z: number) => void;
+   537→}) {
+   538→  const dam = DAMS[damId];
+   539→  return (
+   540→    <div className="flex flex-col gap-2">
+   541→      <Panel title="Flood impact" right={<Chip kind="simulated">SIMULATED ESTIMATE</Chip>}>
+   542→        {impact ? (
+   543→          <>
+   544→            <div className="grid grid-cols-2 gap-1.5">
+   545→              <KPI label="Flooded area" value={impact.floodedKm2.toFixed(1)} unit="km²" />
+   546→              <KPI label="Population exposed" value={impact.population.toLocaleString('en-IN')} tone={impact.population > 0 ? 'red' : 'cyan'} />
+   547→              <KPI label="Buildings" value={impact.buildings.toLocaleString('en-IN')} />
+   548→              <KPI label="Roads flooded" value={impact.roadsKm.toFixed(0)} unit="km" />
+   549→              <KPI label="Villages affected" value={`${impact.villages}/${dam.villages.length}`} />
+   550→              <KPI label="Bridges / hospitals / schools" value={`${impact.bridges} / ${impact.hospitals} / ${impact.schools}`} tone="slate" />
+   551→              <KPI label="Max depth" value={impact.maxDepthM.toFixed(1)} unit="m" />
+   552→              <KPI label="Max velocity" value={impact.maxVelMs.toFixed(1)} unit="m/s" />
+   553→            </div>
+   554→            <SectionTitle>Villages — arrival &amp; exposure</SectionTitle>
+   555→            <div className="flex flex-col gap-1">
+   556→              {impact.affectedVillages.map((v) => (
+   557→                <button
+   558→                  key={v.name}
+   559→                  onClick={() => {
+   560→                    const def = dam.villages.find((x) => x.name === v.name);
+   561→                    if (def) onFocus(def.x, def.z);
+   562→                  }}
+   563→                  className="flex items-center justify-between rounded border border-white/5 bg-white/[0.02] px-2 py-1 text-left text-[10.5px] hover:border-cyan-400/30 hover:bg-cyan-500/5"
+   564→                >
+   565→                  <span className="text-slate-200">{v.name}</span>
+   566→                  <span className="flex gap-2 font-mono text-[9.5px]">
+   567→                    <span className={v.arrivalMin !== null ? 'text-amber-300' : 'text-slate-500'}>
+   568→                      {v.arrivalMin !== null ? `⏱ ${fmtRealTime(v.arrivalMin)}` : 'dry'}
+   569→                    </span>
+   570→                    <span className="text-cyan-300">{v.depthM.toFixed(1)} m</span>
+   571→                    <span className="text-slate-400">{v.velMs.toFixed(1)} m/s</span>
+   572→                  </span>
+   573→                </button>
+   574→              ))}
+   575→            </div>
+   576→            <SectionTitle>Critical infrastructure</SectionTitle>
+   577→            <div className="grid grid-cols-1 gap-1">
+   578→              {impact.affectedInfra.map((f) => (
+   579→                <div key={f.name} className="flex items-center justify-between text-[10.5px]">
+   580→                  <span className="text-slate-300">{f.name}</span>
+   581→                  <span className={`font-mono text-[9px] font-semibold ${f.flooded ? 'text-red-300' : 'text-emerald-300'}`}>
+   582→                    {f.flooded ? 'INUNDATED' : 'SAFE'}
+   583→                  </span>
+   584→                </div>
+   585→              ))}
+   586→            </div>
+   587→          </>
+   588→        ) : (
+   589→          <p className="text-[10.5px] text-slate-500">Run a failure scenario to compute impact metrics.</p>
+   590→        )}
+   591→        <p className="mt-2 text-[8.5px] leading-relaxed text-slate-500">
+   592→          Calculated from spatial intersections of the simulated flood raster with the
+   593→          demonstration GIS layer. Demonstration dataset — not real asset counts.
+   594→        </p>
+   595→      </Panel>
+   596→    </div>
+   597→  );
+   598→}
+   599→
+   600→// ============================================================ evacuation
+   601→export function EvacPanel({
+   602→  plans, shelters, onRoute, impact,
+   603→}: {
+   604→  plans: EvacPlan[];
+   605→  shelters: { name: string; capacity: number; risk: string }[];
+   606→  onRoute: (plan: EvacPlan | null) => void;
+   607→  impact: ImpactResult | null;
+   608→}) {
+   609→  return (
+   610→    <div className="flex flex-col gap-2">
+   611→      <Panel title="Safe zones & shelters">
+   612→        {shelters.map((s) => (
+   613→          <Row key={s.name} k={s.name} v={`cap ${s.capacity} · risk ${s.risk}`} accent="text-emerald-300" />
+   614→        ))}
+   615→        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+   616→          Sited on high ground considering elevation, predicted flood extent and road connectivity (demo layout).
+   617→        </p>
+   618→      </Panel>
+   619→      <Panel title="Evacuation planner" right={impact && impact.villages > 0 ? <Chip kind="warn">{impact.villages} FLOODED</Chip> : <Chip kind="ok">READY</Chip>}>
+   620→        {plans.length === 0 && <p className="text-[10.5px] text-slate-500">Run a scenario to compute evacuation plans.</p>}
+   621→        <div className="flex flex-col gap-1.5">
+   622→          {plans.map((p) => (
+   623→            <div key={p.village} className="rounded border border-white/5 bg-white/[0.02] p-2">
+   624→              <div className="flex items-center justify-between">
+   625→                <p className="text-[11px] font-medium text-slate-200">{p.village}</p>
+   626→                <span className={`font-mono text-[9px] font-semibold ${p.safe ? 'text-emerald-300' : 'text-red-300'}`}>
+   627→                  {p.arrivalMin === null ? 'NOT FLOODED' : p.safe ? `MARGIN ${fmtRealTime(p.marginMin ?? 0)}` : `UNSAFE −${fmtRealTime(-(p.marginMin ?? 0))}`}
+   628→                </span>
+   629→              </div>
+   630→              <p className="mt-0.5 text-[9.5px] text-slate-400">
+   631→                → {p.shelter} · {p.distanceKm.toFixed(1)} km · travel {fmtRealTime(p.travelMin)}
+   632→                {p.arrivalMin !== null && <> · flood arrival {fmtRealTime(p.arrivalMin)}</>}
+   633→              </p>
+   634→              <Button
+   635→                size="sm"
+   636→                variant="outline"
+   637→                className="mt-1.5 h-6 border-emerald-500/30 bg-emerald-900/20 px-2 text-[9.5px] text-emerald-200 hover:bg-emerald-900/40"
+   638→                onClick={() => onRoute(p)}
+   639→              >
+   640→                Start evacuation route
+   641→              </Button>
+   642→            </div>
+   643→          ))}
+   644→        </div>
+   645→        <p className="mt-2 text-[8.5px] leading-relaxed text-slate-500">
+   646→          Routes avoid predicted flooded roads; travel time at 32 km/h demonstration speed.
+   647→        </p>
+   648→      </Panel>
+   649→    </div>
+   650→  );
+   651→}
+   652→
+   653→// ============================================================ data & validation
+   654→export function DataPanel({
+   655→  damId, validation, iot, onIot,
+   656→}: {
+   657→  damId: DamId;
+   658→  validation: { agreementPct: number; overlapKm2: number; missedKm2: number; falseKm2: number } | null;
+   659→  iot: { connected: boolean; cm: number; log: string[] };
+   660→  onIot: (on: boolean) => void;
+   661→}) {
+   662→  const dam = DAMS[damId];
+   663→  return (
+   664→    <div className="flex flex-col gap-2">
+   665→      <Panel title="Data freshness" right={<Chip kind="simulated">DEMO DATASET</Chip>}>
+   666→        <Row k="Buildings (OSM + survey)" v="updated 12 days ago" accent="text-slate-300" />
+   667→        <Row k="Roads" v="updated 5 days ago" accent="text-slate-300" />
+   668→        <Row k="Land cover" v="updated 23 days ago" accent="text-slate-300" />
+   669→        <Row k="Satellite scene" v="updated 2 days ago" accent="text-slate-300" />
+   670→        <Row k="DEM" v="reference dataset" accent="text-slate-300" />
+   671→        <Row k="Sensor feed" v={iot.connected ? 'ESP32 demo connected' : 'simulated feed'} accent={iot.connected ? 'text-emerald-300' : 'text-slate-300'} />
+   672→      </Panel>
+   673→
+   674→      <Panel title="Predicted vs observed flood" right={<Chip kind="forecast">MODEL CHECK</Chip>}>
+   675→        {validation ? (
+   676→          <>
+   677→            <Row k="Model agreement" v={`${validation.agreementPct}%`} accent={validation.agreementPct > 80 ? 'text-emerald-300' : 'text-amber-300'} />
+   678→            <Row k="Overlap" v={`${validation.overlapKm2.toFixed(1)} km²`} accent="text-slate-300" />
+   679→            <Row k="Missed area" v={`${validation.missedKm2.toFixed(1)} km²`} accent="text-slate-300" />
+   680→            <Row k="False-positive area" v={`${validation.falseKm2.toFixed(1)} km²`} accent="text-slate-300" />
+   681→          </>
+   682→        ) : (
+   683→          <p className="text-[10.5px] text-slate-500">Comparison available after flood propagation.</p>
+   684→        )}
+   685→        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+   686→          “Observed” extent is a simulated satellite-derived classification of the same flood —
+   687→          demonstrates the validation workflow without fabricating real imagery results.
+   688→        </p>
+   689→      </Panel>
+   690→
+   691→      <Panel title="ESP32 hardware prototype" right={<Chip kind="simulated">MQTT · DEMO</Chip>}>
+   692→        <div className="mb-2 flex items-center justify-between">
+   693→          <span className="flex items-center gap-1.5 text-[11px] text-slate-300">
+   694→            <Cpu className="h-3.5 w-3.5 text-cyan-400" /> Miniature dam sensor
+   695→          </span>
+   696→          <Switch checked={iot.connected} onCheckedChange={onIot} aria-label="Connect ESP32 demo" />
+   697→        </div>
+   698→        {iot.connected && (
+   699→          <>
+   700→            <Row k="Physical water level" v={`${iot.cm.toFixed(1)} cm`} accent="text-emerald-300" />
+   701→            <Row k="Digital twin equivalent" v={`${simToRealLevel(dam, 15.2 + (iot.cm / 30) * 7.5).toFixed(1)} m`} />
+   702→            <div className="mt-1.5 max-h-24 overflow-y-auto rounded bg-black/40 p-1.5 font-mono text-[8.5px] leading-relaxed text-emerald-200/80">
+   703→              {iot.log.slice(-6).map((l, i) => <p key={i}>{l}</p>)}
+   704→            </div>
+   705→          </>
+   706→        )}
+   707→        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+   708→          Physical-digital sync demo: ultrasonic sensor → ESP32 → Wi-Fi MQTT → twin. Low-voltage
+   709→          demonstration hardware, not a real dam monitoring device.
+   710→        </p>
+   711→      </Panel>
+   712→
+   713→      <Panel title="Hydraulic model & assumptions" right={<Chip kind="simulated">TECHNICAL</Chip>}>
+   714→        <Row k="Solver" v="2D shallow-water (Saint-Venant)" accent="text-slate-300" />
+   715→        <Row k="Grid" v="384 × 224 · 0.5 m cells" accent="text-slate-300" />
+   716→        <Row k="Gravity" v="9.81 m/s²" accent="text-slate-300" />
+   717→        <Row k="Flux scheme" v="HLL / Rusanov + hydrostatic reconstruction" accent="text-slate-300" />
+   718→        <Row k="Friction" v="Manning n = 0.028" accent="text-slate-300" />
+   719→        <Row k="Time step" v="CFL-limited ≤ 8 ms substeps" accent="text-slate-300" />
+   720→        <Row k="Boundary" v="reflective walls + gorge inflow" accent="text-slate-300" />
+   721→        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+   722→          Risk assessment is based on available indicators, not certainty. Dam-break results are
+   723→          simulated downstream consequences under the selected breach scenario. Architecture
+   724→          supports HEC-RAS 2D integration for production validation.
+   725→        </p>
+   726→      </Panel>
+   727→
+   728→      <Panel title="Urban change detection">
+   729→        <Row k="Comparison" v="2025 → 2026" accent="text-slate-300" />
+   730→        <Row k="New buildings" v="+342 (demo)" accent="text-slate-300" />
+   731→        <Row k="New roads" v="+12 km (demo)" accent="text-slate-300" />
+   732→        <Row k="Land-use change" v="4.8 km² (demo)" accent="text-slate-300" />
+   733→        <p className="mt-1.5 flex items-center gap-1 text-[8.5px] text-slate-500">
+   734→          <Satellite className="h-3 w-3" /> Periodic ingestion: satellite + OSM + government GIS (async jobs).
+   735→          <Database className="ml-1 h-3 w-3" />
+   736→        </p>
+   737→      </Panel>
+   738→    </div>
+   739→  );
+   740→}
+   741→
+   742→// ============================================================ digital twin tab (layers + cameras)
+   743→export function TwinPanel({
+   744→  layer, onLayer, hd, onHd, infra, onInfra, foam, onFoam, spray, onSpray, speedMap, onSpeedMap, sound, onSound, timeScale, onTimeScale, fps,
+   745→}: {
+   746→  layer: number;
+   747→  onLayer: (m: number) => void;
+   748→  hd: boolean; onHd: (b: boolean) => void;
+   749→  infra: boolean; onInfra: (b: boolean) => void;
+   750→  foam: boolean; onFoam: (b: boolean) => void;
+   751→  spray: boolean; onSpray: (b: boolean) => void;
+   752→  speedMap: boolean; onSpeedMap: (b: boolean) => void;
+   753→  sound: boolean; onSound: (b: boolean) => void;
+   754→  timeScale: number; onTimeScale: (v: number) => void;
+   755→  fps: number;
+   756→}) {
+   757→  const layers: { id: number; label: string }[] = [
+   758→    { id: 0, label: 'Natural' },
+   759→    { id: 1, label: 'Flood depth' },
+   760→    { id: 2, label: 'Flow velocity' },
+   761→    { id: 3, label: 'Arrival time' },
+   762→  ];
+   763→  return (
+   764→    <div className="flex flex-col gap-2">
+   765→      <Panel title="Map layers">
+   766→        <RadioGroup value={String(layer)} onValueChange={(v) => onLayer(Number(v))} className="gap-1.5">
+   767→          {layers.map((l) => (
+   768→            <label key={l.id} className="flex cursor-pointer items-center gap-2 text-[11px] text-slate-300">
+   769→              <RadioGroupItem value={String(l.id)} className="h-3.5 w-3.5" />
+   770→              {l.label}
+   771→            </label>
+   772→          ))}
+   773→        </RadioGroup>
+   774→        <div className="mt-2 flex flex-col gap-2 border-t border-white/5 pt-2">
+   775→          <label className="flex items-center justify-between text-[11px] text-slate-300">
+   776→            Infrastructure markers
+   777→            <Switch checked={infra} onCheckedChange={onInfra} />
+   778→          </label>
+   779→          <label className="flex items-center justify-between text-[11px] text-slate-300">
+   780→            Foam &amp; spray
+   781→            <Switch checked={foam} onCheckedChange={onFoam} />
+   782→          </label>
+   783→          <label className="flex items-center justify-between text-[11px] text-slate-300">
+   784→            HD graphics (bloom)
+   785→            <Switch checked={hd} onCheckedChange={onHd} />
+   786→          </label>
+   787→          <label className="flex items-center justify-between text-[11px] text-slate-300">
+   788→            Ambient sound
+   789→            <Switch checked={sound} onCheckedChange={onSound} />
+   790→          </label>
+   791→        </div>
+   792→      </Panel>
+   793→      <Panel title="Engineering mode">
+   794→        <label className="flex items-center justify-between text-[11px] text-slate-300">
+   795→          Flow speed map
+   796→          <Switch checked={speedMap} onCheckedChange={onSpeedMap} />
+   797→        </label>
+   798→        <div className="mt-2">
+   799→          <div className="mb-1 flex justify-between text-[10px] text-slate-400">
+   800→            <span>TIME SCALE</span>
+   801→            <span className="font-mono text-cyan-300">{timeScale.toFixed(2)}×</span>
+   802→          </div>
+   803→          <Slider value={[timeScale]} min={0.1} max={2} step={0.05} onValueChange={([v]) => onTimeScale(v)} />
+   804→        </div>
+   805→        <label className="mt-2 flex items-center justify-between text-[11px] text-slate-300">
+   806→          Spray particles
+   807→          <Switch checked={spray} onCheckedChange={onSpray} />
+   808→        </label>
+   809→      </Panel>
+   810→      <Panel title="Solver status">
+   811→        <Row k="Engine" v="GPU shallow water · WebGL2" accent="text-slate-300" />
+   812→        <Row k="Render" v={`${Math.round(fps)} fps`} accent="text-slate-300" />
+   813→      </Panel>
+   814→    </div>
+   815→  );
+   816→}
+   817→
+   818→// ============================================================ timeline (time machine)
+   819→export function TimelineBar({
+   820→  snapCount, snapTimes, scrubIdx, onScrub, onLive, paused, onPause, stats, cams, onCam, cinematic, onCinema, timeMinPerSec,
+   821→}: {
+   822→  snapCount: number;
+   823→  snapTimes: number[];
+   824→  scrubIdx: number | null;
+   825→  onScrub: (i: number) => void;
+   826→  onLive: () => void;
+   827→  paused: boolean;
+   828→  onPause: () => void;
+   829→  stats: UIStats | null;
+   830→  cams: { id: CamPreset; label: string }[];
+   831→  onCam: (c: CamPreset) => void;
+   832→  cinematic: boolean;
+   833→  onCinema: () => void;
+   834→  timeMinPerSec: number;
+   835→}) {
+   836→  const maxIdx = Math.max(snapCount - 1, 0);
+   837→  return (
+   838→    <div className="pointer-events-auto absolute bottom-3 left-2 right-2 z-30 rounded-lg border border-cyan-100/10 bg-[#0a1526]/92 px-3 py-2 shadow-2xl backdrop-blur-md">
+   839→      <div className="flex items-center gap-3">
+   840→        <Button size="icon" variant="outline" onClick={onPause} aria-label={paused ? 'Play' : 'Pause'}
+   841→          className="h-8 w-8 border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
+   842→          {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+   843→        </Button>
+   844→        <div className="flex min-w-0 flex-1 items-center gap-2">
+   845→          <span className="hidden shrink-0 text-[9px] tracking-[0.14em] text-slate-500 sm:inline">TIME MACHINE</span>
+   846→          <Slider
+   847→            value={[scrubIdx !== null ? scrubIdx : maxIdx]}
+   848→            min={0}
+   849→            max={Math.max(maxIdx, 1)}
+   850→            step={1}
+   851→            disabled={snapCount === 0}
+   852→            onValueChange={([v]) => onScrub(v)}
+   853→            aria-label="Simulation timeline"
+   854→            className="flex-1"
+   855→          />
+   856→          <span className="w-24 shrink-0 text-right font-mono text-[10px] text-cyan-300">
+   857→            {scrubIdx !== null ? `T+${fmtRealTime((snapTimes[scrubIdx] ?? 0) * timeMinPerSec)}` : `T+${fmtRealTime(stats?.realMin ?? 0)}`}
+   858→          </span>
+   859→          {scrubIdx !== null && (
+   860→            <Button size="sm" onClick={onLive} className="h-7 bg-cyan-600 px-2 text-[10px] text-white hover:bg-cyan-500">
+   861→              <Radio className="mr-1 h-3 w-3" /> LIVE
+   862→            </Button>
+   863→          )}
+   864→        </div>
+   865→        <div className="hidden items-center gap-1 lg:flex">
+   866→          {cams.map((c) => (
+   867→            <Button key={c.id} size="sm" variant="outline" onClick={() => onCam(c.id)}
+   868→              className="h-7 border-white/10 bg-white/5 px-2 text-[9.5px] text-slate-300 hover:bg-white/10">
+   869→              {c.label}
+   870→            </Button>
+   871→          ))}
+   872→          <Button size="sm" variant="outline" onClick={onCinema}
+   873→            className={`h-7 border-white/10 px-2 text-[9.5px] ${cinematic ? 'bg-cyan-600/30 text-cyan-200' : 'bg-white/5 text-slate-300'} hover:bg-white/10`}>
+   874→            Cinema
+   875→          </Button>
+   876→        </div>
+   877→      </div>
+   878→    </div>
+   879→  );
+   880→}
+   881→

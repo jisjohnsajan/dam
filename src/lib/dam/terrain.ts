@@ -131,7 +131,10 @@ export function buildStructBase(): Float32Array {
 export interface BreachSpan {
   start: number; // block index 0..4
   count: number; // 1..5
-  depth01: number; // 0 intact → 1 fully eroded
+  depth01: number; // 0 intact → 1 fully eroded (max across blocks)
+  depths?: number[]; // per-block erosion depth01 — lets blocks fail in a staggered
+  // sequence while the simulated structure field stays EXACTLY in sync with the
+  // visual block sinking (water only ever pours through the visibly-open gap).
 }
 
 // Apply current breach / gate animation onto a copy of the base structure.
@@ -154,11 +157,14 @@ export function applyStructState(
     for (let j = j0; j <= j1; j++) {
       const z = (j + 0.5) * DZ - LZ / 2;
       if (z < zA || z > zB) continue;
+      const kb = Math.min(breach.count - 1, Math.max(0, Math.floor((z - zA) / BLOCK_W)));
+      const d01 = breach.depths ? breach.depths[kb] : breach.depth01;
+      if (d01 <= 0) continue;
       for (let i = i0; i <= i1; i++) {
         if (base[j * NX + i] > -500) {
           const b = bedAt((i + 0.5) * DX, z);
           const invert = Math.min(Math.max(b + 0.4, BREACH_BOTTOM - 1.2), BREACH_BOTTOM + 1.4);
-          target[j * NX + i] = CREST + (invert - CREST) * breach.depth01;
+          target[j * NX + i] = CREST + (invert - CREST) * d01;
         }
       }
     }

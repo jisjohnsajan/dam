@@ -5,13 +5,13 @@
 /* eslint-disable react-hooks/immutability */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DamSim, type CamPreset, type DamStats, type LayerMode } from '@/lib/dam/engine';
+import { DamSim, type CamPreset, type DamStats, type LayerMode, type ScenarioParams } from '@/lib/dam/engine';
 import {
   TopBar, CommandCenter, ScenarioPanel, ImpactPanel, EvacPanel, DataPanel, TwinPanel,
   GaugesPanel, TimelineBar, TABS, type ScenarioForm, type TabId, type UIStats,
 } from '@/components/damsafe/panels';
 import { Panel, GradientLegend } from '@/components/damsafe/ui';
-import { AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal, Zap, Waves, Droplets, DoorOpen, CloudRain, RotateCcw } from 'lucide-react';
 import {
   computeRisk, computeForecast, computeImpact, computeEvac, computeValidation,
   type EvacPlan, type ImpactResult, type RiskResult, type ForecastPoint,
@@ -77,8 +77,16 @@ export default function Page() {
   const [scrubIdx, setScrubIdx] = useState<number | null>(null);
   const [snapInfo, setSnapInfo] = useState<{ count: number; times: number[] }>({ count: 0, times: [] });
   const [iot, setIot] = useState<{ connected: boolean; cm: number; log: string[] }>({ connected: false, cm: 0, log: [] });
-  const [showLeft, setShowLeft] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1100);
-  const [showRight, setShowRight] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 900);
+  // SSR-safe defaults (false) — real viewport-based values are applied after
+  // mount in an effect, otherwise the server HTML mismatches (hydration error).
+  const [showLeft, setShowLeft] = useState(false);
+  const [showRight, setShowRight] = useState(false);
+  const [rainOn, setRainOn] = useState(false);
+
+  useEffect(() => {
+    setShowLeft(window.innerWidth >= 1100);
+    setShowRight(window.innerWidth >= 900);
+  }, []);
 
   // ---- engine lifecycle
   useEffect(() => {
@@ -151,14 +159,26 @@ export default function Page() {
     engineRef.current?.setLayer(m as LayerMode);
   }, []);
 
-  const onRun = useCallback(() => {
+  const launchScenario = useCallback((p: ScenarioParams) => {
     const eng = engineRef.current;
     if (!eng) return;
-    hydroRef.current = [[], [], [], []];
-    setHydro([]);
+    if (eng.scenarioActive) eng.reset(); // allow instant switch between scenarios
     setRunning(true);
     setMode('scenario');
-    eng.runScenario({
+    setScrubIdx(null);
+    setForm((f) => ({ ...f, ...p }));
+    hydroRef.current = [[], [], [], []];
+    setHydro([]);
+    eng.runScenario(p);
+    // unlock timeline data
+    setTimeout(() => {
+      const e2 = engineRef.current;
+      if (e2) setSnapInfo({ count: e2.snapCount, times: e2.snapTimes });
+    }, 500);
+  }, []);
+
+  const onRun = useCallback(() => {
+    launchScenario({
       levelFrac: form.levelFrac,
       mechanism: form.mechanism,
       breachWidthM: form.breachWidthM,
@@ -166,12 +186,7 @@ export default function Page() {
       location: form.location,
       rain: form.rain,
     });
-    // unlock timeline data
-    setTimeout(() => {
-      const e2 = engineRef.current;
-      if (e2) setSnapInfo({ count: e2.snapCount, times: e2.snapTimes });
-    }, 500);
-  }, [form]);
+  }, [form, launchScenario]);
 
   const onReset = useCallback(() => {
     const eng = engineRef.current;
@@ -187,6 +202,37 @@ export default function Page() {
     hydroRef.current = [[], [], [], []];
     setHydro([]);
   }, []);
+
+  // one-click demo actions (flood / dam break / piping / gates / storm / reset)
+  const onQuick = useCallback((id: string) => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    switch (id) {
+      case 'breach':
+        launchScenario({ levelFrac: 0.92, mechanism: 'structural', breachWidthM: 100, formationMin: 20, location: 'center', rain: 'none' });
+        break;
+      case 'overtop':
+        launchScenario({ levelFrac: 1.06, mechanism: 'overtopping', breachWidthM: 120, formationMin: 30, location: 'center', rain: 'heavy' });
+        break;
+      case 'piping':
+        launchScenario({ levelFrac: 0.95, mechanism: 'piping', breachWidthM: 70, formationMin: 40, location: 'left', rain: 'moderate' });
+        break;
+      case 'gates':
+        eng.openGates();
+        break;
+      case 'storm': {
+        const next = !rainOn;
+        setRainOn(next);
+        eng.setRain(next ? 'heavy' : 'none');
+        break;
+      }
+      case 'reset':
+        eng.setRain('none');
+        setRainOn(false);
+        onReset();
+        break;
+    }
+  }, [launchScenario, onReset, rainOn]);
 
   // refresh snapshot list periodically while a scenario runs
   useEffect(() => {
@@ -240,6 +286,21 @@ export default function Page() {
   }, [onLevel]);
 
   const dam = DAMS[damId];
+
+  // stage-aware banner text (null = hidden)
+  const stageInfo = (() => {
+    if (!running || !stats) return null;
+    const s = stats.stage;
+    if (s <= 1) return { text: 'PREPARING RESERVOIR…', alert: false };
+    if (s === 2) return { text: 'RESERVOIR SURCHARGING…', alert: false };
+    if (s === 3) return { text: `SIMULATED DAM FAILURE · BREACH FORMING ${Math.round(stats.breach01 * 100)}%`, alert: true };
+    if (s === 4) return { text: `FLOOD WAVE PROPAGATING · T+${fmtRealTime(stats.realMin)}`, alert: true };
+    return stats.progress01 < 0.999
+      ? { text: 'PROCESSING FLOOD IMPACTS…', alert: false }
+      : { text: 'SCENARIO COMPLETE — SEE IMPACT & EVACUATION TABS', alert: false };
+  })();
+  const stageText = stageInfo?.text ?? null;
+  const stageAlert = stageInfo?.alert ?? false;
 
   return (
     <main className="fixed inset-0 overflow-hidden bg-[#060b14]" aria-label="DAMSAFE 3D dam risk and flood digital twin">
@@ -332,7 +393,7 @@ export default function Page() {
 
       {/* layer legends */}
       {!cinematic && layer === 1 && (
-        <div className="absolute bottom-[72px] left-2 z-20">
+        <div className="absolute bottom-[146px] left-2 z-20 hidden md:block">
           <GradientLegend
             title="FLOOD DEPTH · m"
             stops={['#2988bf', '#1a6ba6', '#0f4085', '#081c57']}
@@ -341,7 +402,7 @@ export default function Page() {
         </div>
       )}
       {!cinematic && layer === 2 && (
-        <div className="absolute bottom-[72px] left-2 z-20">
+        <div className="absolute bottom-[146px] left-2 z-20 hidden md:block">
           <GradientLegend
             title="FLOW VELOCITY · m/s"
             stops={['rgb(0,60,150)', 'rgb(0,192,240)', 'rgb(96,240,96)', 'rgb(240,240,64)', 'rgb(240,80,24)']}
@@ -350,7 +411,7 @@ export default function Page() {
         </div>
       )}
       {!cinematic && layer === 3 && (
-        <div className="absolute bottom-[72px] left-2 z-20">
+        <div className="absolute bottom-[146px] left-2 z-20 hidden md:block">
           <GradientLegend
             title="FLOOD ARRIVAL · after breach"
             stops={['#29bf4d', '#a6d126', '#fab819', '#e54019', '#85198c']}
@@ -359,11 +420,41 @@ export default function Page() {
         </div>
       )}
 
-      {/* scenario progress pill */}
-      {!cinematic && running && stats && stats.stage >= 3 && stats.stage < 5 && (
-        <div className="pointer-events-none absolute bottom-[72px] left-1/2 z-20 -translate-x-1/2">
-          <span className="rounded bg-red-950/80 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-red-200 backdrop-blur-sm">
-            SIMULATED DAM FAILURE · breach {Math.round(stats.breach01 * 100)}% · flood T+{fmtRealTime(stats.realMin)}
+      {/* one-click quick actions */}
+      {!cinematic && (
+        <div className="pointer-events-auto absolute bottom-[66px] left-1/2 z-20 flex w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-1.5 overflow-x-auto rounded-xl border border-cyan-100/10 bg-[#0a1526]/90 px-2 py-1.5 shadow-2xl backdrop-blur-md damsafe-scroll">
+          <span className="hidden shrink-0 px-1 text-[9px] font-semibold tracking-[0.18em] text-slate-500 sm:inline">QUICK ACTIONS</span>
+          {([
+            { id: 'breach', label: 'Dam break', icon: <Zap className="h-3.5 w-3.5" />, cls: 'border-red-500/40 bg-red-950/70 text-red-200 hover:bg-red-900/70' },
+            { id: 'overtop', label: 'Flood overtop', icon: <Waves className="h-3.5 w-3.5" />, cls: 'border-amber-500/40 bg-amber-950/60 text-amber-200 hover:bg-amber-900/60' },
+            { id: 'piping', label: 'Pipe burst', icon: <Droplets className="h-3.5 w-3.5" />, cls: 'border-orange-500/40 bg-orange-950/60 text-orange-200 hover:bg-orange-900/60' },
+            { id: 'gates', label: 'Open gates', icon: <DoorOpen className="h-3.5 w-3.5" />, cls: 'border-cyan-500/40 bg-cyan-950/50 text-cyan-200 hover:bg-cyan-900/50' },
+            { id: 'storm', label: rainOn ? 'Stop storm' : 'Storm rain', icon: <CloudRain className="h-3.5 w-3.5" />, cls: rainOn ? 'border-indigo-300/60 bg-indigo-600/40 text-indigo-100' : 'border-indigo-500/40 bg-indigo-950/60 text-indigo-200 hover:bg-indigo-900/60' },
+            { id: 'reset', label: 'Reset', icon: <RotateCcw className="h-3.5 w-3.5" />, cls: 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10' },
+          ] as const).map((b) => (
+            <button
+              key={b.id}
+              onClick={() => onQuick(b.id)}
+              className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10.5px] font-semibold tracking-wide backdrop-blur-sm transition-colors ${b.cls}`}
+            >
+              {b.icon}
+              {b.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* animated scenario stage banner */}
+      {!cinematic && stageText && (
+        <div className="pointer-events-none absolute bottom-[108px] left-1/2 z-20 -translate-x-1/2">
+          <span
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1 text-[10px] font-semibold tracking-wide backdrop-blur-sm ${
+              stageAlert
+                ? 'bg-red-950/85 text-red-200 animate-[damsafe-alert_1.5s_ease-in-out_infinite]'
+                : 'bg-[#0a1526]/85 text-cyan-200'
+            }`}
+          >
+            {stageText}
           </span>
         </div>
       )}

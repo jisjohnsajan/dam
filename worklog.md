@@ -174,3 +174,41 @@ Stage Summary:
 - Known limitation: the headless sandbox throttles rAF, so automated screenshots run far below real
   speed; solver stays CFL-stable at UI time scales (≤2×); timeline scrubs restore solver state at
   half resolution (documented in UI as HISTORICAL FRAME).
+
+---
+Task ID: post-review-1
+Agent: Super Z (main)
+Task: Fix hydration error; add quick-action buttons (flood / dam break / etc.); improve animations; fix bugs.
+
+Work Log:
+- Hydration fix (src/app/page.tsx): showLeft/showRight no longer read window.innerWidth in useState
+  initializers (server rendered closed panels, client open panels → aria-label/icon/style mismatch
+  on the panel toggle button). Defaults are now false + useEffect applies viewport values post-mount.
+- Bug fixes: GaugeStat gained `froude` (computeStats now emits it; TS2339 resolved); structArr/
+  structBase/bedGrid use definite-assignment (`!:`) so tsc strict passes; panels.tsx mechanism label
+  verified correct.
+- Staggered breach collapse (terrain.ts + engine.ts): BreachSpan gained per-block `depths[]`;
+  applyStructState lowers the structure field PER BLOCK with each block's own curve, and the visual
+  monolith blocks sink/tip with the identical curve (delay = up to 0.3·τ, random per block) — keeps
+  the "water only pours through the visibly-open gap" invariant while the collapse now plays as a
+  sequential crumble instead of a uniform drop.
+- Storm system (engine.ts buildRain/updateWeather + glsl.ts): 1100-drop LineSegments rain with wind
+  slant; rainVis envelope lerps sun/hemi/environment/fog/sky(turbidity,rayleigh,mie)/exposure toward
+  storm look; occasional lightning flashes (sun spike + cool tint + exposure bump); water shader gets
+  uRain → high-frequency rain dapple normals, damped spec/sky glare; water fog uniforms track scene fog.
+- setRain(r) public API: live-mode storm = inflow surge (26/64) + reservoir swell via drive target
+  boost (+0.45 / +1.25 m); during scenarios it overrides scenario rain inflow. scenarioActive getter.
+- Quick actions (page.tsx): floating centered bar (w-max fix for left-1/2 shrink-to-fit) with
+  Dam break / Flood overtop / Pipe burst / Open gates / Storm rain toggle / Reset; launchScenario()
+  helper allows instant scenario switching (engine reset first); state-aware banner replaces the old
+  pill (preparing → surcharging → breach forming % → flood wave T+ → processing → complete) with
+  pulsing alert style during breach/flood stages; `damsafe-alert` keyframes added to globals.css.
+- Legends moved to bottom-[146px] and hidden <md to avoid overlap with the quick bar.
+
+Stage Summary:
+- Browser-verified (agent-browser): fresh load has NO hydration error and no console/page errors;
+  Dam break ran (PREPARING RESERVOIR… → SIMULATED DAM FAILURE · BREACH FORMING %), gauges/hydrograph
+  live, timeline snapshotting; Storm rain toggled (rain streaks + rise +10.7 m/hr, button → Stop
+  storm); Reset returns to LIVE cleanly; Flood overtop launches with automatic storm visuals;
+  mobile 390px shows scrollable quick bar, no overlaps.
+- tsc clean for src/, eslint clean on changed files, dev.log 200s only.

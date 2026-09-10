@@ -51,6 +51,7 @@ export interface GaugeStat {
   qPeak: number;
   depth: number; // m
   vel: number; // m/s
+  froude: number; // downstream Froude number at gauge
   arrivalMin: number | null; // real minutes
   distKm: number;
 }
@@ -132,9 +133,9 @@ export class DamSim {
   private downPass!: FullScreenQuad;
   private snapPass!: FullScreenQuad;
 
-  private structArr: Float32Array;
-  private structBase: Float32Array;
-  private bedGrid: Float32Array;
+  private structArr!: Float32Array;
+  private structBase!: Float32Array;
+  private bedGrid!: Float32Array;
 
   // ---- scene objects
   private waterMat!: THREE.ShaderMaterial;
@@ -148,6 +149,18 @@ export class DamSim {
   private evacLine: THREE.Line | null = null;
   private audio = new RiverAudio();
   private sunDir = new THREE.Vector3(-0.42, 0.62, 0.28).normalize();
+  // weather / storm system
+  private sunLight!: THREE.DirectionalLight;
+  private hemiLight!: THREE.HemisphereLight;
+  private skyU!: Record<string, THREE.IUniform>;
+  private rainMesh!: THREE.LineSegments;
+  private rainPos!: Float32Array;
+  private rainVis = 0;
+  private rainHeavy = false;
+  private boltTimer = 9;
+  private flash = 0;
+  private fogDay = new THREE.Color(0xc6d8ea);
+  private fogStorm = new THREE.Color(0x76838f);
 
   // ---- state
   private curState: THREE.WebGLRenderTarget;
@@ -172,6 +185,7 @@ export class DamSim {
   private breachSpan: BreachSpan | null = null;
   private breachDepth01 = 0;
   private breachInverts: number[] = [];
+  private breachDelays: number[] = []; // staggered per-block failure (demo s)
   private gateT: number | null = null;
   private gateElev: number | null = null;
   private overtopT = 0;
@@ -254,6 +268,7 @@ export class DamSim {
     const sky = new Sky();
     sky.scale.setScalar(12000);
     const su = sky.material.uniforms;
+    this.skyU = su as unknown as Record<string, THREE.IUniform>;
     su.turbidity.value = 5.5;
     su.rayleigh.value = 2.4;
     su.mieCoefficient.value = 0.006;
@@ -269,6 +284,7 @@ export class DamSim {
 
     // lights
     const sun = new THREE.DirectionalLight(0xffe8c8, 2.1);
+    this.sunLight = sun;
     sun.position.copy(this.sunDir).multiplyScalar(420);
     sun.castShadow = true;
     sun.shadow.mapSize.set(4096, 4096);
@@ -278,12 +294,15 @@ export class DamSim {
     sun.shadow.normalBias = 0.6;
     sun.target.position.set(105, 10, 0);
     this.scene.add(sun, sun.target);
-    this.scene.add(new THREE.HemisphereLight(0xbfd8ef, 0x6b6354, 0.45));
+    const hemi = new THREE.HemisphereLight(0xbfd8ef, 0x6b6354, 0.45);
+    this.hemiLight = hemi;
+    this.scene.add(hemi);
 
     this.buildTerrainMesh();
     this.buildGpuResources();
     this.buildWater();
     this.buildProps();
+    this.buildRain();
 
     this.curState = this.rtStateA;
     this.nextState = this.rtStateB;
@@ -521,6 +540,7 @@ export class DamSim {
         uShowSpeed: { value: 0 },
         uLayerMode: { value: 0 },
         uTime: { value: 0 },
+        uRain: { value: 0 },
         uFogColor: { value: new THREE.Color(0xc6d8ea) },
         uFogNear: { value: 380 },
         uFogFar: { value: 1600 },
@@ -598,6 +618,93 @@ export class DamSim {
         home: bt.mesh.position.clone(),
       });
     }
+  }
+
+  // ==================================================================== rain
+  private buildRain(): void {
+    const N = 1100;
+    this.rainPos = new Float32Array(N * 6);
+    const p = this.rainPos;
+    for (let i = 0; i < N; i++) {
+      const x = -30 + Math.random() * (LX + 110);
+      const y = Math.random() * 82;
+      const z = -LZ / 2 - 40 + Math.random() * (LZ + 80);
+      p[i * 6] = x; p[i * 6 + 1] = y; p[i * 6 + 2] = z;
+      p[i * 6 + 3] = x + 0.26; p[i * 6 + 4] = y + 1.5; p[i * 6 + 5] = z + 0.09;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    const mat = new THREE.LineBasicMaterial({ color: 0xaaccee, transparent: true, opacity: 0, depthWrite: false });
+    this.rainMesh = new THREE.LineSegments(geo, mat);
+    this.rainMesh.visible = false;
+    this.rainMesh.frustumCulled = false;
+    this.rainMesh.renderOrder = 9;
+    this.scene.add(this.rainMesh);
+  }
+
+  // per-frame storm driver: rain streaks, darkened sky/fog, lightning flashes
+  private updateWeather(dtReal: number): void {
+    const target = this.rainInflow > 0 ? (this.rainHeavy ? 1 : 0.55) : 0;
+    this.rainVis += (target - this.rainVis) * Math.min(1, dtReal * 1.4);
+    const rv = this.rainVis;
+
+    if (this.rainMesh) {
+      this.rainMesh.visible = rv > 0.02;
+      if (rv > 0.02) {
+        const p = this.rainPos;
+        const n = p.length / 6;
+        const fall = 46 * dtReal;
+        const drift = 8 * dtReal;
+        for (let i = 0; i < n; i++) {
+          const k = i * 6;
+          p[k] += drift; p[k + 1] -= fall; p[k + 2] += drift * 0.35;
+          p[k + 3] = p[k] + 0.26; p[k + 4] = p[k + 1] + 1.5; p[k + 5] = p[k + 2] + 0.09;
+          if (p[k + 1] < 2.5) {
+            const x = -30 + Math.random() * (LX + 110);
+            const y = 48 + Math.random() * 34;
+            const z = -LZ / 2 - 40 + Math.random() * (LZ + 80);
+            p[k] = x; p[k + 1] = y; p[k + 2] = z;
+            p[k + 3] = x + 0.26; p[k + 4] = y + 1.5; p[k + 5] = z + 0.09;
+          }
+        }
+        (this.rainMesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+        (this.rainMesh.material as THREE.LineBasicMaterial).opacity = 0.38 * rv;
+      }
+    }
+
+    // occasional lightning during heavy rain
+    this.flash *= Math.exp(-dtReal * 6.5);
+    if (rv > 0.6) {
+      this.boltTimer -= dtReal;
+      if (this.boltTimer <= 0) {
+        this.boltTimer = 5 + Math.random() * 10;
+        this.flash = 0.7 + Math.random() * 0.5;
+      }
+    }
+
+    // dim / storm the atmosphere
+    this.sunLight.intensity = 2.1 * (1 - 0.7 * rv) + this.flash * 5.5;
+    this.sunLight.color.setHex(this.flash > 0.25 ? 0xdfe8ff : 0xffe8c8);
+    this.hemiLight.intensity = 0.45 * (1 - 0.4 * rv) + this.flash * 1.2;
+    this.scene.environmentIntensity = 0.32 * (1 - 0.5 * rv);
+    const fog = this.scene.fog as THREE.Fog;
+    fog.color.copy(this.fogDay).lerp(this.fogStorm, rv * 0.85);
+    fog.near = 380 - 200 * rv;
+    fog.far = 1600 - 700 * rv;
+    this.renderer.toneMappingExposure = 0.85 - 0.13 * rv + this.flash * 0.12;
+    const su = this.skyU;
+    if (su) {
+      su.turbidity.value = 5.5 + 4.5 * rv;
+      su.rayleigh.value = Math.max(2.4 - 1.7 * rv, 0.3);
+      su.mieCoefficient.value = 0.006 + 0.02 * rv;
+    }
+
+    // water shader: choppier ripples + storm fog match
+    const wu = this.waterMat.uniforms;
+    wu.uRain.value = rv;
+    (wu.uFogColor.value as THREE.Color).copy(fog.color);
+    wu.uFogNear.value = fog.near;
+    wu.uFogFar.value = fog.far;
   }
 
   // ================================================================ sim stepping
@@ -693,6 +800,20 @@ export class DamSim {
     return clamp(b + 0.4, BREACH_BOTTOM - 1.2, BREACH_BOTTOM + 1.4);
   }
 
+  // wire up a failing block span: invert elevations + staggered failure delays
+  private initBreach(span: BreachSpan): void {
+    this.breachSpan = span;
+    this.breachInverts = [];
+    for (let b = span.start; b < span.start + span.count; b++) {
+      const z0 = BLOCK_Z0 + b * BLOCK_W;
+      this.breachInverts.push(this.blockInvert(z0 + BLOCK_W / 2));
+    }
+    this.breachDelays = [];
+    for (let k = 0; k < span.count; k++) {
+      this.breachDelays.push(Math.random() * this.breachTau * 0.3);
+    }
+  }
+
   runScenario(p: ScenarioParams): void {
     if (this.scenario) return;
     this.scenario = p;
@@ -701,6 +822,7 @@ export class DamSim {
     this.snapClock = 0;
     this.overtopT = 0;
     this.rainInflow = p.rain === 'none' ? 0 : p.rain === 'moderate' ? 26 : 64;
+    this.rainHeavy = p.rain === 'heavy';
     this.breachSpan = null;
     this.breachT = null;
     this.breachDepth01 = 0;
@@ -720,13 +842,7 @@ export class DamSim {
       this.breachT = -clamp((target - this.lastLevel) / 1.4, 1.5, 5);
       this.breachTau = Math.max(p.formationMin / this.damProfile.timeMinPerSec, 4) / (p.mechanism === 'piping' ? 0.65 : 1) / this.breachRate;
       this.breachPre = p.mechanism === 'piping' ? 0.22 : 0;
-      const span = this.breachSpanFor(p.breachWidthM, p.location);
-      this.breachSpan = span;
-      this.breachInverts = [];
-      for (let b = span.start; b < span.start + span.count; b++) {
-        const z0 = BLOCK_Z0 + b * BLOCK_W;
-        this.breachInverts.push(this.blockInvert(z0 + BLOCK_W / 2));
-      }
+      this.initBreach(this.breachSpanFor(p.breachWidthM, p.location));
     }
     this.audio.burst(0.2);
   }
@@ -755,6 +871,7 @@ export class DamSim {
     this.breachSpan = null;
     this.breachDepth01 = 0;
     this.breachInverts = [];
+    this.breachDelays = [];
     this.gateT = null;
     this.gateElev = null;
     this.overtopT = 0;
@@ -856,8 +973,7 @@ export class DamSim {
     }
 
     this.updateCamera(dtReal);
-
-    // shader uniforms
+    this.updateWeather(dtReal);
     this.waterMat.uniforms.uState.value = this.curState.texture;
     this.waterMat.uniforms.uFoam.value = this.curFoam.texture;
     this.waterMat.uniforms.uTime.value = this.simTime;
@@ -922,39 +1038,50 @@ export class DamSim {
       // once overtopped for long enough, crest erosion begins
       if (this.overtopT > 7 && (this.breachT === null || this.breachT < 0)) {
         if (this.breachSpan === null) {
-          const span = this.breachSpanFor(sc.breachWidthM, sc.location);
-          this.breachSpan = span;
           this.breachTau = Math.max(sc.formationMin / this.damProfile.timeMinPerSec, 4) / this.breachRate;
           this.breachPre = 0;
-          this.breachInverts = [];
-          for (let b = span.start; b < span.start + span.count; b++) {
-            const z0 = BLOCK_Z0 + b * BLOCK_W;
-            this.breachInverts.push(this.blockInvert(z0 + BLOCK_W / 2));
-          }
+          this.initBreach(this.breachSpanFor(sc.breachWidthM, sc.location));
         }
         this.triggerBreachErosion();
       }
     }
 
-    // breach formation
+    // breach formation — each monolith block fails on a staggered delay, and the
+    // simulated structure field descends per block with the SAME curve as the
+    // visuals, so water always pours exactly through the visibly-open gap.
     if (this.breachT !== null && this.breachSpan) {
       this.breachT += dt;
       if (this.breachT > 0) {
-        const p = 1 - Math.exp(-Math.pow(this.breachT / this.breachTau, 1.7));
-        this.breachDepth01 = clamp(this.breachPre + (1 - this.breachPre) * p, 0, 1);
-        this.breachSpan.depth01 = this.breachDepth01;
+        const tau = this.breachTau;
+        const depths: number[] = [];
+        let minP = 1;
+        let maxD = 0;
+        for (let k = 0; k < this.breachSpan.count; k++) {
+          const tt = Math.max(this.breachT - (this.breachDelays[k] ?? 0), 0);
+          const pk = 1 - Math.exp(-Math.pow(tt / tau, 1.7));
+          const d = clamp(this.breachPre + (1 - this.breachPre) * pk, 0, 1);
+          depths.push(d);
+          if (d < minP) minP = d;
+          if (d > maxD) maxD = d;
+        }
+        this.breachDepth01 = maxD;
+        this.breachSpan.depth01 = maxD;
+        this.breachSpan.depths = depths;
         this.structDirty = true;
-        // sink the failing blocks with the SAME curve as the struct field
+        // sink the failing blocks with the SAME per-block curve as the struct field
         const bi = this.breachInverts;
         for (let k = 0; k < this.breachSpan.count; k++) {
           const blockIdx = this.breachSpan.start + k;
           const blk = this.dam.breachBlocks[blockIdx];
           if (!blk) continue;
-          const drop = (CREST - bi[k]) * this.breachDepth01;
+          const d = depths[k];
+          const drop = (CREST - bi[k]) * d;
           blk.group.position.y = -drop;
-          blk.group.rotation.z = -0.05 * this.breachDepth01;
+          blk.group.rotation.z = -0.06 * d;
+          blk.group.rotation.x = (blockIdx % 2 === 0 ? 1 : -1) * 0.016 * d;
+          blk.group.rotation.y = (blockIdx % 2 === 0 ? -1 : 1) * 0.012 * d;
         }
-        if (p > 0.995 && this.breachT > this.breachTau) {
+        if (minP > 0.995 && this.breachT > tau) {
           this.breachT = null; // formation complete; struct stays at full depth
         }
       }
@@ -1166,6 +1293,7 @@ export class DamSim {
         qPeak: this.gaugePeaks[gi],
         depth: stage,
         vel: gv,
+        froude,
         arrivalMin: this.gaugeArr[gi] !== null ? this.gaugeArr[gi]! * this.damProfile.timeMinPerSec : null,
         distKm: (g.x - DAM_X) * this.damProfile.lenScale / 1000,
       });
@@ -1294,6 +1422,10 @@ export class DamSim {
     return this.damProfile;
   }
 
+  get scenarioActive(): boolean {
+    return !!this.scenario;
+  }
+
   getDownsample(): { data: Float32Array; w: number; h: number; arr: Float32Array } {
     return { data: this.field.data, w: DOWN_W, h: DOWN_H, arr: this.arr };
   }
@@ -1311,6 +1443,19 @@ export class DamSim {
     if (!this.scenario) {
       const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
       eu.uDriveEta.value = fracToSimLevel(this.liveFrac);
+      eu.uDriveOn.value = 1;
+    }
+  }
+
+  // live-mode storm: inflow surge + reservoir swell + rain visuals. Also works
+  // during a scenario, where it simply overrides the scenario rain inflow.
+  setRain(r: RainScenario): void {
+    this.rainHeavy = r === 'heavy';
+    this.rainInflow = r === 'none' ? 0 : r === 'moderate' ? 26 : 64;
+    if (!this.scenario) {
+      const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+      const boost = this.rainInflow > 0 ? (this.rainHeavy ? 1.25 : 0.45) : 0;
+      eu.uDriveEta.value = Math.min(fracToSimLevel(this.liveFrac) + boost, 24.2);
       eu.uDriveOn.value = 1;
     }
   }
