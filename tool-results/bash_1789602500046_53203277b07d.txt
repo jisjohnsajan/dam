@@ -1,0 +1,857 @@
+     1→// DAMSAFE 3D — world dressing: hydroelectric powerhouse (intake tower,
+     2→// penstocks, turbine hall, tailrace, transformers, transmission line), the
+     3→// downstream river town (open-world district), and the far terrain ring that
+     4→// closes the horizon beyond the solver domain.
+     5→//
+     6→// Everything here is VISUAL dressing: the GPU shallow-water solver keeps
+     7→// running on its own domain, so the powerhouse/town sit on bedAt() ground and
+     8→// the flood wave genuinely reaches them during scenarios.
+     9→import * as THREE from 'three';
+    10→import { LX, LZ, bedAt, terrainColor, fbm } from './terrain';
+    11→
+    12→const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
+    13→
+    14→function hashRnd(i: number): number {
+    15→  const h = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+    16→  return h - Math.floor(h);
+    17→}
+    18→
+    19→function canvasTex(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): THREE.Texture {
+    20→  const cv = document.createElement('canvas');
+    21→  cv.width = w;
+    22→  cv.height = h;
+    23→  const ctx = cv.getContext('2d')!;
+    24→  draw(ctx);
+    25→  const tex = new THREE.CanvasTexture(cv);
+    26→  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    27→  tex.colorSpace = THREE.SRGBColorSpace;
+    28→  tex.anisotropy = 4;
+    29→  return tex;
+    30→}
+    31→
+    32→// shared materials (kept local so world dressing disposes with the scene)
+    33→const matConcrete = (): THREE.MeshStandardMaterial =>
+    34→  new THREE.MeshStandardMaterial({ color: 0xa8a296, roughness: 0.9, metalness: 0.02, envMapIntensity: 0.3 });
+    35→const matConcreteDark = (): THREE.MeshStandardMaterial =>
+    36→  new THREE.MeshStandardMaterial({ color: 0x8b857a, roughness: 0.92, metalness: 0.02 });
+    37→const matSteel = (): THREE.MeshStandardMaterial =>
+    38→  new THREE.MeshStandardMaterial({ color: 0x66707a, roughness: 0.45, metalness: 0.62 });
+    39→const matGalvanised = (): THREE.MeshStandardMaterial =>
+    40→  new THREE.MeshStandardMaterial({ color: 0x9aa3ab, roughness: 0.55, metalness: 0.5 });
+    41→const matWhite = (): THREE.MeshStandardMaterial =>
+    42→  new THREE.MeshStandardMaterial({ color: 0xdcd8cc, roughness: 0.75 });
+    43→const matDark = (): THREE.MeshStandardMaterial =>
+    44→  new THREE.MeshStandardMaterial({ color: 0x2c3438, roughness: 0.6, metalness: 0.3 });
+    45→
+    46→// ============================================================ POWERHOUSE
+    47→export interface PowerhouseProps {
+    48→  group: THREE.Group;
+    49→  rotors: THREE.Group[]; // spinning generator flywheels
+    50→}
+    51→
+    52→function makePylon(h: number): THREE.Group {
+    53→  const g = new THREE.Group();
+    54→  const mat = matGalvanised();
+    55→  const base = 1.5;
+    56→  const top = 0.45;
+    57→  // 4 splayed legs
+    58→  for (const sx of [-1, 1]) {
+    59→    for (const sz of [-1, 1]) {
+    60→      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.09, h, 5), mat);
+    61→      const lx = (sx * (base + (top - base) * 0.5)) / 2;
+    62→      const lz = (sz * (base + (top - base) * 0.5)) / 2;
+    63→      leg.position.set(lx, h / 2, lz);
+    64→      leg.rotation.z = -sx * 0.115;
+    65→      leg.rotation.x = sz * 0.115;
+    66→      leg.castShadow = true;
+    67→      g.add(leg);
+    68→    }
+    69→  }
+    70→  // cross-braces on both faces (2 levels)
+    71→  for (const lvl of [0.3, 0.62]) {
+    72→    for (const sz of [-1, 1]) {
+    73→      const brace = new THREE.Mesh(new THREE.BoxGeometry(base * (1 - lvl * 0.55), 0.06, 0.06), mat);
+    74→      brace.position.set(0, h * lvl, (sz * base * (1 - lvl * 0.55)) / 2);
+    75→      brace.rotation.z = sz * 0.5;
+    76→      g.add(brace);
+    77→    }
+    78→  }
+    79→  // cross-arms (two levels) + peak
+    80→  const arm1 = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.09, 0.09), mat);
+    81→  arm1.position.y = h * 0.8;
+    82→  const arm2 = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.09, 0.09), mat);
+    83→  arm2.position.y = h * 0.93;
+    84→  const peak = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, h * 0.1, 5), mat);
+    85→  peak.position.y = h * 1.04;
+    86→  arm1.castShadow = arm2.castShadow = true;
+    87→  g.add(arm1, arm2, peak);
+    88→  return g;
+    89→}
+    90→
+    91→function makeCable(a: THREE.Vector3, b: THREE.Vector3, sag: number, mat: THREE.Material): THREE.Mesh {
+    92→  const mid = a.clone().add(b).multiplyScalar(0.5);
+    93→  mid.y -= sag;
+    94→  const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+    95→  const geo = new THREE.TubeGeometry(curve, 20, 0.035, 5, false);
+    96→  const m = new THREE.Mesh(geo, mat);
+    97→  m.castShadow = false;
+    98→  return m;
+    99→}
+   100→
+   101→export function buildPowerhouse(): PowerhouseProps {
+   102→  const group = new THREE.Group();
+   103→  const rotors: THREE.Group[] = [];
+   104→  const conc = matConcrete();
+   105→  const concDark = matConcreteDark();
+   106→  const steel = matSteel();
+   107→
+   108→  // ---- intake tower in the reservoir (upstream face of the dam)
+   109→  const intake = new THREE.Group();
+   110→  const iBed = bedAt(106.8, -24); // ≈ 11.9
+   111→  const tower = new THREE.Mesh(new THREE.BoxGeometry(3.6, 15, 4.6), conc);
+   112→  tower.position.set(106.8, iBed + 6.6, -24); // top ≈ 25.1 (2 m above crest)
+   113→  tower.castShadow = tower.receiveShadow = true;
+   114→  const deck = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.32, 5.5), concDark);
+   115→  deck.position.set(106.8, iBed + 14.0, -24);
+   116→  deck.castShadow = true;
+   117→  intake.add(tower, deck);
+   118→  // gantry hoist on the deck
+   119→  for (const dz of [-1.7, 1.7]) {
+   120→    const col = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.3, 0.16), steel);
+   121→    col.position.set(105.6, iBed + 15.3, -24 + dz);
+   122→    intake.add(col, col.clone().translateX(2.4));
+   123→  }
+   124→  const beam = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.16, 0.2), steel);
+   125→  beam.position.set(106.8, iBed + 16.5, -24);
+   126→  const hoist = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.45, 0.55), matDark());
+   127→  hoist.position.set(106.8, iBed + 16.0, -24);
+   128→  intake.add(beam, hoist);
+   129→  // trash racks on the upstream face
+   130→  const rackFrame = new THREE.Mesh(new THREE.BoxGeometry(0.12, 6.4, 4.0), matDark());
+   131→  rackFrame.position.set(104.95, iBed + 6.4, -24);
+   132→  intake.add(rackFrame);
+   133→  for (let k = 0; k < 10; k++) {
+   134→    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.07, 6.2, 0.09), steel);
+   135→    bar.position.set(104.88, iBed + 6.4, -25.8 + k * 0.4);
+   136→    intake.add(bar);
+   137→  }
+   138→  // dark intake openings facing the dam + wet well rim
+   139→  for (const oy of [2.0, 4.6]) {
+   140→    const open = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.3, 1.5), matDark());
+   141→    open.position.set(108.65, iBed + oy, -24);
+   142→    intake.add(open);
+   143→  }
+   144→  group.add(intake);
+   145→
+   146→  // service bridge intake → crest
+   147→  const bridge = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.24, 2.1), concDark);
+   148→  bridge.position.set(110.2, iBed + 14.0, -24);
+   149→  bridge.castShadow = true;
+   150→  group.add(bridge);
+   151→  for (const s of [-1, 1]) {
+   152→    const rail = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.05, 0.05), steel);
+   153→    rail.position.set(110.2, iBed + 14.42, -24 + s * 0.95);
+   154→    group.add(rail);
+   155→  }
+   156→
+   157→  // exposed conduit across the upstream face (tower → dam body, submerged)
+   158→  const feedCurve = new THREE.CatmullRomCurve3([
+   159→    new THREE.Vector3(108.4, iBed + 7.1, -24),
+   160→    new THREE.Vector3(110.2, iBed + 7.1, -24),
+   161→    new THREE.Vector3(112.1, iBed + 7.1, -24),
+   162→  ]);
+   163→  const feed = new THREE.Mesh(new THREE.TubeGeometry(feedCurve, 8, 0.52, 10, false), steel);
+   164→  group.add(feed);
+   165→
+   166→  // ---- penstocks down the downstream face → powerhouse
+   167→  const penMat = matSteel();
+   168→  const penZ = [-25.6, -22.4];
+   169→  for (const z of penZ) {
+   170→    const curve = new THREE.CatmullRomCurve3([
+   171→      new THREE.Vector3(116.9, 19.4, z),
+   172→      new THREE.Vector3(118.4, 15.8, z),
+   173→      new THREE.Vector3(120.1, 12.9, z),
+   174→      new THREE.Vector3(122.9, 12.4, z),
+   175→    ]);
+   176→    const pipe = new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.52, 12, false), penMat);
+   177→    pipe.castShadow = true;
+   178→    group.add(pipe);
+   179→    // ring collars
+   180→    for (const t of [0.3, 0.55, 0.8]) {
+   181→      const p = curve.getPoint(t);
+   182→      const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.18, 12), penMat);
+   183→      collar.position.copy(p);
+   184→      collar.rotation.z = Math.PI / 2 - 0.35;
+   185→      group.add(collar);
+   186→    }
+   187→  }
+   188→
+   189→  // ---- powerhouse hall at the toe (open downstream bay showing the units)
+   190→  const ph = new THREE.Group();
+   191→  const phBed = bedAt(126, -24); // ≈ 11.2
+   192→  const floor = new THREE.Mesh(new THREE.BoxGeometry(7.8, 0.5, 10.2), concDark);
+   193→  floor.position.set(126.3, phBed + 0.25, -24);
+   194→  floor.receiveShadow = true;
+   195→  ph.add(floor);
+   196→  const wallH = 5.4;
+   197→  const backW = new THREE.Mesh(new THREE.BoxGeometry(0.35, wallH, 10.2), conc);
+   198→  backW.position.set(122.65, phBed + wallH / 2, -24);
+   199→  backW.castShadow = backW.receiveShadow = true;
+   200→  const sideA = new THREE.Mesh(new THREE.BoxGeometry(7.8, wallH, 0.35), conc);
+   201→  sideA.position.set(126.3, phBed + wallH / 2, -29.0);
+   202→  const sideB = sideA.clone();
+   203→  sideB.position.z = -19.0;
+   204→  ph.add(backW, sideA, sideB);
+   205→  // open front: columns + lintel
+   206→  for (const dz of [-28.6, -19.4]) {
+   207→    const col = new THREE.Mesh(new THREE.BoxGeometry(0.5, wallH, 0.5), conc);
+   208→    col.position.set(130.0, phBed + wallH / 2, dz);
+   209→    col.castShadow = true;
+   210→    ph.add(col);
+   211→  }
+   212→  const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.1, 10.2), conc);
+   213→  lintel.position.set(130.0, phBed + wallH - 0.55, -24);
+   214→  lintel.castShadow = true;
+   215→  ph.add(lintel);
+   216→  // roof + monitor
+   217→  const roof = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.32, 10.9), matWhite());
+   218→  roof.position.set(126.3, phBed + wallH + 0.35, -24);
+   219→  roof.castShadow = true;
+   220→  const monitor = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.7, 7.0), matSteel());
+   221→  monitor.position.set(126.3, phBed + wallH + 0.85, -24);
+   222→  ph.add(roof, monitor);
+   223→  // crane rail inside
+   224→  for (const dz of [-28.3, -19.7]) {
+   225→    const railB = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.14, 0.14), steel);
+   226→    railB.position.set(126.3, phBed + wallH - 0.25, dz);
+   227→    ph.add(railB);
+   228→  }
+   229→  // sign
+   230→  const signTex = canvasTex(256, 64, (c) => {
+   231→    c.fillStyle = '#e8e4d8';
+   232→    c.fillRect(0, 0, 256, 64);
+   233→    c.fillStyle = '#173a4a';
+   234→    c.font = 'bold 30px Arial';
+   235→    c.textAlign = 'center';
+   236→    c.textBaseline = 'middle';
+   237→    c.fillText('POWERHOUSE', 128, 34);
+   238→  });
+   239→  const sign = new THREE.Mesh(
+   240→    new THREE.PlaneGeometry(3.4, 0.85),
+   241→    new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.7 }),
+   242→  );
+   243→  sign.position.set(130.36, phBed + wallH - 0.55, -24);
+   244→  sign.rotation.y = Math.PI / 2;
+   245→  ph.add(sign);
+   246→  group.add(ph);
+   247→
+   248→  // ---- 2 turbine-generator units (visible through the open bay)
+   249→  for (const uz of [-26.4, -21.6]) {
+   250→    const unit = new THREE.Group();
+   251→    // spiral casing
+   252→    const casing = new THREE.Mesh(new THREE.TorusGeometry(1.05, 0.36, 10, 22), steel);
+   253→    casing.rotation.x = Math.PI / 2;
+   254→    casing.position.y = phBed + 1.35;
+   255→    casing.castShadow = true;
+   256→    // generator barrel
+   257→    const gen = new THREE.Mesh(
+   258→      new THREE.CylinderGeometry(0.88, 0.88, 1.8, 16),
+   259→      new THREE.MeshStandardMaterial({ color: 0x2f5a78, roughness: 0.42, metalness: 0.45 }),
+   260→    );
+   261→    gen.position.y = phBed + 2.9;
+   262→    gen.castShadow = true;
+   263→    // rotating flywheel + spokes (visible above the generator)
+   264→    const rotor = new THREE.Group();
+   265→    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.5, 10), matDark());
+   266→    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.07, 8, 20), new THREE.MeshStandardMaterial({ color: 0xc7b25a, roughness: 0.4, metalness: 0.6 }));
+   267→    wheel.rotation.x = Math.PI / 2;
+   268→    rotor.add(hub, wheel);
+   269→    for (let k = 0; k < 4; k++) {
+   270→      const spoke = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.07, 0.07), matDark());
+   271→      spoke.rotation.y = (k * Math.PI) / 4;
+   272→      rotor.add(spoke);
+   273→    }
+   274→    rotor.position.set(0, phBed + 4.05, 0);
+   275→    rotors.push(rotor);
+   276→    unit.add(casing, gen, rotor);
+   277→    unit.position.set(125.6, 0, uz);
+   278→    group.add(unit);
+   279→    // draft tube exit through the back wall
+   280→    const draft = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.2, 1.6), concDark);
+   281→    draft.position.set(122.2, phBed + 0.75, uz);
+   282→    group.add(draft);
+   283→  }
+   284→
+   285→  // ---- tailrace guide walls
+   286→  for (const [z0, z1] of [[-27.6, -26.2], [-20.4, -21.8]]) {
+   287→    const wall = new THREE.Mesh(new THREE.BoxGeometry(6.2, 1.7, 0.4), concDark);
+   288→    const mx = 133.4;
+   289→    const mz = (z0 + z1) / 2;
+   290→    wall.position.set(mx, bedAt(mx, mz) + 0.6, mz);
+   291→    wall.rotation.y = Math.atan2(z1 - z0, 6.2) * -1;
+   292→    wall.castShadow = wall.receiveShadow = true;
+   293→    group.add(wall);
+   294→  }
+   295→
+   296→  // ---- transformer yard + switch gantry
+   297→  const yard = new THREE.Group();
+   298→  const pad = new THREE.Mesh(new THREE.BoxGeometry(8.4, 0.22, 6.2), new THREE.MeshStandardMaterial({ color: 0x77726a, roughness: 0.98 }));
+   299→  pad.position.set(133.2, bedAt(133.2, -13.5) + 0.11, -13.5);
+   300→  pad.receiveShadow = true;
+   301→  yard.add(pad);
+   302→  for (const dz of [-15.2, -11.8]) {
+   303→    const tr = new THREE.Group();
+   304→    const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.7, 1.5), matGalvanised());
+   305→    body.position.y = 1.0;
+   306→    body.castShadow = true;
+   307→    tr.add(body);
+   308→    for (let f = 0; f < 4; f++) {
+   309→      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.3, 1.3), matSteel());
+   310→      fin.position.set(-0.7 + f * 0.45, 1.0, 0);
+   311→      tr.add(fin);
+   312→    }
+   313→    for (const bx of [-0.55, 0, 0.55]) {
+   314→      const bush = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 0.55, 8), new THREE.MeshStandardMaterial({ color: 0xb9ae90, roughness: 0.5 }));
+   315→      bush.position.set(bx, 2.1, 0);
+   316→      tr.add(bush);
+   317→    }
+   318→    tr.position.set(132.2, pad.position.y, dz);
+   319→    yard.add(tr);
+   320→  }
+   321→  // switch gantry + first cable anchor
+   322→  for (const dz of [-16.0, -11.0]) {
+   323→    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 7.0, 6), matGalvanised());
+   324→    col.position.set(136.4, bedAt(136.4, dz) + 3.5, dz);
+   325→    col.castShadow = true;
+   326→    yard.add(col);
+   327→  }
+   328→  const gBeam = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 5.4), matGalvanised());
+   329→  gBeam.position.set(136.4, bedAt(136.4, -13.5) + 6.9, -13.5);
+   330→  yard.add(gBeam);
+   331→  group.add(yard);
+   332→
+   333→  // ---- transmission line: powerhouse → town substation
+   334→  const cableMat = new THREE.MeshBasicMaterial({ color: 0x30343a });
+   335→  const anchors: { x: number; z: number; h: number }[] = [
+   336→    { x: 136.4, z: -13.5, h: 7.0 },
+   337→    { x: 141.5, z: -10.5, h: 12.5 },
+   338→    { x: 152.0, z: 6.5, h: 13.0 },
+   339→    { x: 163.5, z: 18.0, h: 13.0 },
+   340→    { x: 171.5, z: 17.5, h: 9.0 },
+   341→  ];
+   342→  for (let i = 1; i < anchors.length; i++) {
+   343→    const b = anchors[i];
+   344→    const py = makePylon(b.h);
+   345→    const gB = bedAt(b.x, b.z);
+   346→    py.position.set(b.x, gB - 0.2, b.z);
+   347→    group.add(py);
+   348→  }
+   349→  for (let i = 1; i < anchors.length; i++) {
+   350→    const a = anchors[i - 1];
+   351→    const b = anchors[i];
+   352→    const ya = bedAt(a.x, a.z) + a.h * 0.9;
+   353→    const yb = bedAt(b.x, b.z) + b.h * 0.9;
+   354→    for (const off of [-1.1, 0, 1.1]) {
+   355→      const n = new THREE.Vector3(-(b.z - a.z), 0, b.x - a.x).normalize().multiplyScalar(off);
+   356→      const ca = new THREE.Vector3(a.x + n.x, ya, a.z + n.z);
+   357→      const cb = new THREE.Vector3(b.x + n.x, yb, b.z + n.z);
+   358→      group.add(makeCable(ca, cb, 1.4 + off * 0.1, cableMat));
+   359→    }
+   360→  }
+   361→
+   362→  return { group, rotors };
+   363→}
+   364→
+   365→// ============================================================ TOWN
+   366→interface StreetSeg { pts: [number, number][]; w: number }
+   367→
+   368→const TOWN_STREETS: StreetSeg[] = [
+   369→  // right bank (z > 0) — main district
+   370→  { pts: [[152, 20.8], [158, 21.4], [166, 22.0], [174, 22.6], [182, 23.4], [188, 24.2]], w: 3.0 },
+   371→  { pts: [[156.5, 21.0], [157.2, 30], [157.6, 38]], w: 2.6 },
+   372→  { pts: [[164.5, 21.6], [165.2, 30], [165.8, 38.5]], w: 2.6 },
+   373→  { pts: [[172.5, 22.2], [173.2, 30], [173.8, 37]], w: 2.6 },
+   374→  { pts: [[180.5, 23.0], [181.2, 30], [181.8, 36]], w: 2.4 },
+   375→  { pts: [[153, 17.2], [160, 17.6], [168, 18.2], [176, 18.9], [184, 19.7]], w: 2.4 }, // river road
+   376→  // left bank (z < 0)
+   377→  { pts: [[152, -23.2], [160, -23.8], [168, -24.6], [176, -25.6], [183, -26.6]], w: 3.0 },
+   378→  { pts: [[158.5, -21.4], [159.2, -30], [159.8, -38]], w: 2.6 },
+   379→  { pts: [[168.5, -22.4], [169.2, -30], [169.8, -37]], w: 2.6 },
+   380→  { pts: [[153, -17.4], [160, -17.8], [168, -18.4], [176, -19.2]], w: 2.4 },
+   381→];
+   382→
+   383→function distToStreets(x: number, z: number): number {
+   384→  let best = 1e9;
+   385→  for (const st of TOWN_STREETS) {
+   386→    for (let i = 0; i < st.pts.length - 1; i++) {
+   387→      const [ax, az] = st.pts[i];
+   388→      const [bx, bz] = st.pts[i + 1];
+   389→      const dx = bx - ax, dz = bz - az;
+   390→      const t = clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1);
+   391→      const d = Math.hypot(x - (ax + dx * t), z - (az + dz * t));
+   392→      best = Math.min(best, d);
+   393→    }
+   394→  }
+   395→  return best;
+   396→}
+   397→
+   398→function flatRibbon(group: THREE.Group, pts: [number, number][], w: number, mat: THREE.Material, lift = 0.14): void {
+   399→  const pos: number[] = [];
+   400→  const idx: number[] = [];
+   401→  for (let i = 0; i < pts.length - 1; i++) {
+   402→    for (let s = 0; s < 3; s++) {
+   403→      const t0 = s / 3, t1 = (s + 1) / 3;
+   404→      const x0 = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t0;
+   405→      const z0 = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t0;
+   406→      const x1 = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t1;
+   407→      const z1 = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t1;
+   408→      const dx = z1 - z0, dz = -(x1 - x0);
+   409→      const dl = Math.hypot(dx, dz) || 1;
+   410→      const nx = (dx / dl) * w * 0.5, nz = (dz / dl) * w * 0.5;
+   411→      const a = bedAt(x0 - nx, z0 - nz) + lift;
+   412→      const b = bedAt(x0 + nx, z0 + nz) + lift;
+   413→      const c = bedAt(x1 - nx, z1 - nz) + lift;
+   414→      const d = bedAt(x1 + nx, z1 + nz) + lift;
+   415→      const base = pos.length / 3;
+   416→      pos.push(x0 - nx, a, z0 - nz, x0 + nx, b, z0 + nz, x1 - nx, c, z1 - nz, x1 + nx, d, z1 + nz);
+   417→      idx.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+   418→    }
+   419→  }
+   420→  const geo = new THREE.BufferGeometry();
+   421→  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+   422→  geo.setIndex(idx);
+   423→  geo.computeVertexNormals();
+   424→  const mesh = new THREE.Mesh(geo, mat);
+   425→  mesh.receiveShadow = true;
+   426→  group.add(mesh);
+   427→}
+   428→
+   429→function makeBuildingTex(): THREE.Texture {
+   430→  return canvasTex(128, 128, (c) => {
+   431→    c.fillStyle = '#ffffff';
+   432→    c.fillRect(0, 0, 128, 128);
+   433→    for (let ry = 0; ry < 4; ry++) {
+   434→      for (let rx = 0; rx < 4; rx++) {
+   435→        const lit = hashRnd(rx * 7 + ry * 13) > 0.55;
+   436→        c.fillStyle = lit ? 'rgba(255, 214, 140, 0.92)' : 'rgba(38, 52, 60, 0.85)';
+   437→        c.fillRect(10 + rx * 30, 12 + ry * 30, 17, 19);
+   438→      }
+   439→    }
+   440→  });
+   441→}
+   442→
+   443→function makePitchTex(): THREE.Texture {
+   444→  return canvasTex(256, 160, (c) => {
+   445→    c.fillStyle = '#3f7d3a';
+   446→    c.fillRect(0, 0, 256, 160);
+   447→    for (let i = 0; i < 8; i++) {
+   448→      c.fillStyle = i % 2 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+   449→      c.fillRect(i * 32, 0, 32, 160);
+   450→    }
+   451→    c.strokeStyle = 'rgba(255,255,255,0.85)';
+   452→    c.lineWidth = 3;
+   453→    c.strokeRect(8, 8, 240, 144);
+   454→    c.beginPath();
+   455→    c.moveTo(128, 8);
+   456→    c.lineTo(128, 152);
+   457→    c.stroke();
+   458→    c.beginPath();
+   459→    c.arc(128, 80, 26, 0, Math.PI * 2);
+   460→    c.stroke();
+   461→    c.strokeRect(8, 48, 30, 64);
+   462→    c.strokeRect(218, 48, 30, 64);
+   463→  });
+   464→}
+   465→
+   466→function makeClockTex(): THREE.Texture {
+   467→  return canvasTex(128, 128, (c) => {
+   468→    c.fillStyle = '#f2ede0';
+   469→    c.beginPath();
+   470→    c.arc(64, 64, 56, 0, Math.PI * 2);
+   471→    c.fill();
+   472→    c.strokeStyle = '#22303a';
+   473→    c.lineWidth = 6;
+   474→    c.stroke();
+   475→    for (let i = 0; i < 12; i++) {
+   476→      const a = (i / 12) * Math.PI * 2;
+   477→      c.fillStyle = '#22303a';
+   478→      c.fillRect(64 + Math.cos(a) * 44 - 2, 64 + Math.sin(a) * 44 - 2, 4, 4);
+   479→    }
+   480→    c.lineWidth = 5;
+   481→    c.beginPath();
+   482→    c.moveTo(64, 64);
+   483→    c.lineTo(64, 26);
+   484→    c.stroke();
+   485→    c.beginPath();
+   486→    c.moveTo(64, 64);
+   487→    c.lineTo(90, 74);
+   488→    c.stroke();
+   489→  });
+   490→}
+   491→
+   492→function makeAwningTex(): THREE.Texture {
+   493→  return canvasTex(128, 32, (c) => {
+   494→    for (let i = 0; i < 8; i++) {
+   495→      c.fillStyle = i % 2 ? '#c85a3c' : '#e8ddca';
+   496→      c.fillRect(i * 16, 0, 16, 32);
+   497→    }
+   498→  });
+   499→}
+   500→
+   501→function makeFieldTex(a: string, b: string): THREE.Texture {
+   502→  return canvasTex(64, 64, (c) => {
+   503→    c.fillStyle = a;
+   504→    c.fillRect(0, 0, 64, 64);
+   505→    c.fillStyle = b;
+   506→    for (let y = 2; y < 64; y += 8) c.fillRect(0, y, 64, 3);
+   507→  });
+   508→}
+   509→
+   510→export function buildTown(): { group: THREE.Group } {
+   511→  const group = new THREE.Group();
+   512→  const asphalt = new THREE.MeshStandardMaterial({ color: 0x45454a, roughness: 0.95 });
+   513→  const paving = new THREE.MeshStandardMaterial({ color: 0x9b968c, roughness: 0.95 });
+   514→
+   515→  // streets
+   516→  for (const st of TOWN_STREETS) flatRibbon(group, st.pts, st.w, asphalt);
+   517→
+   518→  // ---- instanced buildings
+   519→  const bldTex = makeBuildingTex();
+   520→  const bldMat = new THREE.MeshStandardMaterial({ map: bldTex, roughness: 0.85, metalness: 0.05 });
+   521→  const spots: { x: number; z: number; w: number; d: number; h: number; rot: number; tone: number }[] = [];
+   522→  const tones = [0xd9cdb4, 0xcbb99b, 0xd8d2c4, 0xc2b49a, 0xd3c1a6, 0xbfae94, 0xded6c6, 0xb7a68c];
+   523→  // deterministic scatter on both banks
+   524→  let seed = 1;
+   525→  const nextRnd = () => hashRnd(seed++ * 12.9898);
+   526→  for (const [zSign, x0, x1] of [[1, 152, 188], [-1, 152, 184]] as const) {
+   527→    for (let gx = x0; gx <= x1; gx += 5.2) {
+   528→      for (let g = 0; g < 7; g++) {
+   529→        const zBase = zSign * (14 + g * 4.6 + nextRnd() * 1.6);
+   530→        const z = zSign > 0 ? zBase + 2 : zBase - 1;
+   531→        if (Math.abs(z) > 43 || Math.abs(z) < 13.5) continue;
+   532→        const d = distToStreets(gx + nextRnd(), z);
+   533→        if (d < 3.4 || d > 14) continue;
+   534→        const ground = bedAt(gx, z);
+   535→        if (ground < 3.2 || ground > 15.5) continue;
+   536→        const slope = Math.abs(bedAt(gx + 2, z) - ground) + Math.abs(bedAt(gx, z + 2) - ground);
+   537→        if (slope > 1.7) continue;
+   538→        if (nextRnd() < 0.28) continue;
+   539→        spots.push({
+   540→          x: gx + nextRnd() * 1.4,
+   541→          z,
+   542→          w: 2.6 + nextRnd() * 2.2,
+   543→          d: 2.4 + nextRnd() * 2.0,
+   544→          h: nextRnd() < 0.16 ? 5.5 + nextRnd() * 3.4 : 2.7 + nextRnd() * 2.3,
+   545→          rot: (nextRnd() - 0.5) * 0.24,
+   546→          tone: Math.floor(nextRnd() * tones.length),
+   547→        });
+   548→      }
+   549→    }
+   550→  }
+   551→  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+   552→  const inst = new THREE.InstancedMesh(boxGeo, bldMat, spots.length);
+   553→  const m4 = new THREE.Matrix4();
+   554→  const q = new THREE.Quaternion();
+   555→  const eu = new THREE.Euler();
+   556→  const col = new THREE.Color();
+   557→  spots.forEach((s, i) => {
+   558→    eu.set(0, s.rot, 0);
+   559→    q.setFromEuler(eu);
+   560→    m4.compose(new THREE.Vector3(s.x, bedAt(s.x, s.z) + s.h / 2 - 0.12, s.z), q, new THREE.Vector3(s.w, s.h, s.d));
+   561→    inst.setMatrixAt(i, m4);
+   562→    inst.setColorAt(i, col.setHex(tones[s.tone]));
+   563→  });
+   564→  inst.castShadow = true;
+   565→  inst.receiveShadow = true;
+   566→  inst.instanceMatrix.needsUpdate = true;
+   567→  group.add(inst);
+   568→  // flat roof slabs for a subset
+   569→  const roofMat = new THREE.MeshStandardMaterial({ color: 0x8d867b, roughness: 0.95 });
+   570→  const roofs = new THREE.InstancedMesh(boxGeo, roofMat, spots.length);
+   571→  let ri = 0;
+   572→  spots.forEach((s, i) => {
+   573→    if (hashRnd(i * 3.77) < 0.55) return;
+   574→    m4.compose(new THREE.Vector3(s.x, bedAt(s.x, s.z) + s.h + 0.06, s.z), q.identity(), new THREE.Vector3(s.w + 0.35, 0.16, s.d + 0.35));
+   575→    roofs.setMatrixAt(ri++, m4);
+   576→  });
+   577→  roofs.count = ri;
+   578→  roofs.castShadow = true;
+   579→  group.add(roofs);
+   580→
+   581→  // ---- landmarks
+   582→  // clock tower + plaza (right bank heart)
+   583→  const plaza = new THREE.Mesh(new THREE.CircleGeometry(5.2, 26), paving);
+   584→  plaza.rotation.x = -Math.PI / 2;
+   585→  const pzG = bedAt(166, 27.5);
+   586→  plaza.position.set(166, pzG + 0.16, 27.5);
+   587→  plaza.receiveShadow = true;
+   588→  group.add(plaza);
+   589→  const towerG = new THREE.Group();
+   590→  const shaft = new THREE.Mesh(new THREE.BoxGeometry(2.1, 8.2, 2.1), matConcrete());
+   591→  shaft.position.y = 4.1;
+   592→  shaft.castShadow = true;
+   593→  const clockBox = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.5, 2.5), matWhite());
+   594→  clockBox.position.y = 9.4;
+   595→  clockBox.castShadow = true;
+   596→  towerG.add(shaft, clockBox);
+   597→  const clockTex = makeClockTex();
+   598→  for (const ry of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+   599→    const holder = new THREE.Group();
+   600→    holder.position.y = 9.4;
+   601→    holder.rotation.y = ry;
+   602→    const f2 = new THREE.Mesh(
+   603→      new THREE.CircleGeometry(0.82, 22),
+   604→      new THREE.MeshStandardMaterial({ map: clockTex, roughness: 0.6 }),
+   605→    );
+   606→    f2.position.set(0, 0, 1.27);
+   607→    holder.add(f2);
+   608→    towerG.add(holder);
+   609→  }
+   610→  const spire = new THREE.Mesh(new THREE.ConeGeometry(1.55, 1.7, 4), matConcreteDark());
+   611→  spire.position.y = 11.5;
+   612→  spire.rotation.y = Math.PI / 4;
+   613→  spire.castShadow = true;
+   614→  const finial = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b23a, roughness: 0.35, metalness: 0.6 }));
+   615→  finial.position.y = 12.45;
+   616→  towerG.add(spire, finial);
+   617→  towerG.position.set(166, pzG, 27.5);
+   618→  group.add(towerG);
+   619→
+   620→  // water tower (left bank)
+   621→  const wt = new THREE.Group();
+   622→  const wtG = bedAt(176, -30);
+   623→  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+   624→    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 8.4, 6), matSteel());
+   625→    leg.position.set(sx * 1.15, 4.2, sz * 1.15);
+   626→    leg.rotation.z = -sx * 0.07;
+   627→    leg.rotation.x = sz * 0.07;
+   628→    leg.castShadow = true;
+   629→    wt.add(leg);
+   630→  }
+   631→  const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.9, 1.9, 2.6, 16), matSteel());
+   632→  tank.position.y = 9.6;
+   633→  tank.castShadow = true;
+   634→  const tankTop = new THREE.Mesh(new THREE.ConeGeometry(2.0, 0.9, 16), matConcreteDark());
+   635→  tankTop.position.y = 11.35;
+   636→  wt.add(tank, tankTop);
+   637→  const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 8.4, 6), matDark());
+   638→  riser.position.set(-1.45, 4.2, 0);
+   639→  wt.add(riser);
+   640→  wt.position.set(176, wtG, -30);
+   641→  group.add(wt);
+   642→
+   643→  // market canopy
+   644→  const mk = new THREE.Group();
+   645→  const mkG = bedAt(160.5, 26.5);
+   646→  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+   647→    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.7, 6), matSteel());
+   648→    post.position.set(sx * 3.6, 1.35, sz * 2.2);
+   649→    mk.add(post);
+   650→  }
+   651→  const awning = new THREE.Mesh(
+   652→    new THREE.BoxGeometry(8.2, 0.1, 5.2),
+   653→    new THREE.MeshStandardMaterial({ map: makeAwningTex(), roughness: 0.8 }),
+   654→  );
+   655→  awning.position.y = 2.75;
+   656→  awning.rotation.z = 0.045;
+   657→  awning.castShadow = true;
+   658→  mk.add(awning);
+   659→  for (let k = 0; k < 3; k++) {
+   660→    const stall = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.9, 1.1), new THREE.MeshStandardMaterial({ color: k % 2 ? 0x9a6a45 : 0x6a8a55, roughness: 0.9 }));
+   661→    stall.position.set(-2.4 + k * 2.4, 0.45, (k % 2) * 1.2 - 0.6);
+   662→    stall.castShadow = true;
+   663→    mk.add(stall);
+   664→  }
+   665→  mk.position.set(160.5, mkG, 26.5);
+   666→  group.add(mk);
+   667→
+   668→  // football pitch
+   669→  const pitch = new THREE.Mesh(
+   670→    new THREE.PlaneGeometry(19, 12),
+   671→    new THREE.MeshStandardMaterial({ map: makePitchTex(), roughness: 0.95 }),
+   672→  );
+   673→  pitch.rotation.x = -Math.PI / 2;
+   674→  pitch.rotation.z = 0.06;
+   675→  const piG = bedAt(172, 35.5);
+   676→  pitch.position.set(172, piG + 0.12, 35.5);
+   677→  pitch.receiveShadow = true;
+   678→  group.add(pitch);
+   679→  for (const s of [-1, 1]) {
+   680→    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.5, 3.4), matWhite());
+   681→    post.position.set(172 + s * 9.2, piG + 0.75, 35.5);
+   682→    group.add(post);
+   683→  }
+   684→
+   685→  // temple shrine (left bank)
+   686→  const tp = new THREE.Group();
+   687→  const tpG = bedAt(154, -34);
+   688→  const body = new THREE.Mesh(new THREE.BoxGeometry(4.0, 2.6, 3.2), new THREE.MeshStandardMaterial({ color: 0xd8c9a8, roughness: 0.9 }));
+   689→  body.position.y = 1.3;
+   690→  body.castShadow = true;
+   691→  const roofMat2 = new THREE.MeshStandardMaterial({ color: 0x8a4a35, roughness: 0.88 });
+   692→  const s1 = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.1, 3.6), roofMat2);
+   693→  s1.position.set(-0.92, 3.15, 0);
+   694→  s1.rotation.z = 0.58;
+   695→  const s2 = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.1, 3.6), roofMat2);
+   696→  s2.position.set(0.92, 3.15, 0);
+   697→  s2.rotation.z = -0.58;
+   698→  const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 5.2, 6), matSteel());
+   699→  flagPole.position.set(2.6, 2.6, 0);
+   700→  const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.6), new THREE.MeshStandardMaterial({ color: 0xd85a28, roughness: 0.8, side: THREE.DoubleSide }));
+   701→  flag.position.set(3.1, 4.8, 0);
+   702→  tp.add(body, s1, s2, flagPole, flag);
+   703→  tp.position.set(154, tpG, -34);
+   704→  group.add(tp);
+   705→
+   706→  // park grove + benches
+   707→  const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f5d33, roughness: 0.92, flatShading: true });
+   708→  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.95 });
+   709→  const parkSpots: [number, number][] = [[157.5, 33], [159.5, 35.5], [156, 36.5], [161, 32.5], [158.5, 38]];
+   710→  for (const [px, pz] of parkSpots) {
+   711→    const g = bedAt(px, pz);
+   712→    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.2, 1.8, 6), trunkMat);
+   713→    trunk.position.set(px, g + 0.9, pz);
+   714→    trunk.castShadow = true;
+   715→    const blob = new THREE.Mesh(new THREE.DodecahedronGeometry(1.0 + hashRnd(px * 3 + pz) * 0.6, 0), leafMat);
+   716→    blob.position.set(px, g + 2.5, pz);
+   717→    blob.castShadow = true;
+   718→    group.add(trunk, blob);
+   719→  }
+   720→  for (const [bx, bz, r] of [[164.5, 29.5, 0.4], [167.8, 25.4, -0.6]] as const) {
+   721→    const bench = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 0.5), trunkMat);
+   722→    bench.position.set(bx, bedAt(bx, bz) + 0.45, bz);
+   723→    bench.rotation.y = r;
+   724→    group.add(bench);
+   725→  }
+   726→
+   727→  // streetlights (instanced)
+   728→  const lightSpots: [number, number][] = [];
+   729→  for (const st of TOWN_STREETS) {
+   730→    for (let i = 1; i < st.pts.length; i += 1) {
+   731→      const [ax, az] = st.pts[i - 1];
+   732→      const [bx, bz] = st.pts[i];
+   733→      const segLen = Math.hypot(bx - ax, bz - az);
+   734→      const n = Math.max(1, Math.floor(segLen / 9));
+   735→      for (let k = 0; k < n; k++) {
+   736→        const t = (k + 0.5) / n;
+   737→        lightSpots.push([ax + (bx - ax) * t + 1.6, az + (bz - az) * t + 1.3]);
+   738→      }
+   739→    }
+   740→  }
+   741→  const poleGeo = new THREE.CylinderGeometry(0.045, 0.06, 3.3, 5);
+   742→  const poles = new THREE.InstancedMesh(poleGeo, matSteel(), lightSpots.length);
+   743→  const headGeo = new THREE.SphereGeometry(0.13, 8, 6);
+   744→  const headMat = new THREE.MeshStandardMaterial({ color: 0xf2e6c0, emissive: 0x93813f, emissiveIntensity: 0.9, roughness: 0.4 });
+   745→  const heads = new THREE.InstancedMesh(headGeo, headMat, lightSpots.length);
+   746→  lightSpots.forEach(([lx, lz], i) => {
+   747→    const g = bedAt(lx, lz);
+   748→    m4.makeTranslation(lx, g + 1.65, lz);
+   749→    poles.setMatrixAt(i, m4);
+   750→    m4.makeTranslation(lx - 0.28, g + 3.32, lz);
+   751→    heads.setMatrixAt(i, m4);
+   752→  });
+   753→  poles.castShadow = true;
+   754→  group.add(poles, heads);
+   755→
+   756→  // farmland patches on the outskirts
+   757→  const crops: [number, number, number, number, string, string][] = [
+   758→    [178, -38, 13, 8, '#7a8f43', '#5d7034'],
+   759→    [183, -30, 9, 11, '#9a8a4a', '#7d7038'],
+   760→    [176, 39, 12, 7, '#8a9a4a', '#6d7d38'],
+   761→    [185, 32, 8, 9, '#a5935a', '#87754a'],
+   762→    [186, -20, 7, 9, '#7d8f4a', '#63753a'],
+   763→  ];
+   764→  for (const [fx, fz, fw, fd, ca, cb] of crops) {
+   765→    const g = bedAt(fx, fz);
+   766→    const field = new THREE.Mesh(
+   767→      new THREE.PlaneGeometry(fw, fd),
+   768→      new THREE.MeshStandardMaterial({ map: makeFieldTex(ca, cb), roughness: 1 }),
+   769→    );
+   770→    field.rotation.x = -Math.PI / 2;
+   771→    field.rotation.z = hashRnd(fx + fz) * 0.5;
+   772→    field.position.set(fx, g + 0.1, fz);
+   773→    field.receiveShadow = true;
+   774→    group.add(field);
+   775→  }
+   776→
+   777→  // light-industry sheds near the dam (right bench)
+   778→  for (const [sx, sz, sw] of [[127.5, 27.5, 5.5], [135, 29.5, 6.5], [143, 28.5, 5.0]] as const) {
+   779→    const g = bedAt(sx, sz);
+   780→    const shed = new THREE.Mesh(new THREE.BoxGeometry(sw, 2.6, 4.2), matGalvanised());
+   781→    shed.position.set(sx, g + 1.3, sz);
+   782→    shed.castShadow = true;
+   783→    const shedRoof = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, sw, 10, 1, false, 0, Math.PI), matConcreteDark());
+   784→    shedRoof.rotation.z = Math.PI / 2;
+   785→    shedRoof.rotation.y = Math.PI / 2;
+   786→    shedRoof.scale.y = 0.45;
+   787→    shedRoof.position.set(sx, g + 2.6, sz);
+   788→    shedRoof.castShadow = true;
+   789→    group.add(shed, shedRoof);
+   790→  }
+   791→
+   792→  return { group };
+   793→}
+   794→
+   795→// ============================================================ FAR TERRAIN
+   796→// Visual-only continuation of the world beyond the solver domain: the valley
+   797→// runs on, then a mountain ring closes the horizon (fog blends it out).
+   798→function farBed(x: number, z: number): number {
+   799→  const cx = clamp(x, 0.2, LX - 0.2);
+   800→  const cz = clamp(z, -LZ / 2 + 0.2, LZ / 2 - 0.2);
+   801→  let h = bedAt(cx, cz);
+   802→  // upstream / downstream closures rise steeply (they sit behind the valley
+   803→  // axis); the side ranges rise gently so overview sight-lines stay open
+   804→  const riseX = Math.max((6 - x) * 0.4, (x - (LX + 26)) * 0.42, 0);
+   805→  const riseZ = Math.max((-LZ / 2 - 30 - z) * 0.26, (z - (LZ / 2 + 30)) * 0.26, 0);
+   806→  const rise = Math.max(riseX, riseZ);
+   807→  h += Math.min(rise, 95) * (0.62 + 0.75 * fbm(x * 0.035 + 5.5, z * 0.035 + 1.1, 4));
+   808→  h += (fbm(x * 0.06 + 9.1, z * 0.06 + 3.3, 3) - 0.5) * 9;
+   809→  return h;
+   810→}
+   811→
+   812→function farPatch(x0: number, x1: number, z0: number, z1: number, sx: number, sz: number): THREE.Mesh {
+   813→  const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0, sx, sz);
+   814→  geo.rotateX(-Math.PI / 2);
+   815→  geo.translate((x0 + x1) / 2, 0, (z0 + z1) / 2);
+   816→  const pos = geo.attributes.position as THREE.BufferAttribute;
+   817→  const colors = new Float32Array(pos.count * 3);
+   818→  const col = new THREE.Color();
+   819→  const tc = { r: 0, g: 0, b: 0 };
+   820→  for (let i = 0; i < pos.count; i++) {
+   821→    const x = pos.getX(i);
+   822→    const z = pos.getZ(i);
+   823→    const y = farBed(x, z);
+   824→    pos.setY(i, y);
+   825→    const e = 2.4;
+   826→    const sl = Math.hypot(farBed(x + e, z) - farBed(x - e, z), farBed(x, z + e) - farBed(x, z - e)) / (2 * e);
+   827→    terrainColor(x, z, y, sl, tc);
+   828→    col.setRGB(tc.r, tc.g, tc.b, THREE.SRGBColorSpace);
+   829→    colors[i * 3] = col.r;
+   830→    colors[i * 3 + 1] = col.g;
+   831→    colors[i * 3 + 2] = col.b;
+   832→  }
+   833→  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+   834→  geo.computeVertexNormals();
+   835→  const mesh = new THREE.Mesh(
+   836→    geo,
+   837→    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0, envMapIntensity: 0.18 }),
+   838→  );
+   839→  mesh.receiveShadow = false;
+   840→  return mesh;
+   841→}
+   842→
+   843→export function buildFarTerrain(): { group: THREE.Group } {
+   844→  const group = new THREE.Group();
+   845→  const E = 170; // how far the ring extends sideways
+   846→  const Z0 = -LZ / 2;
+   847→  const Z1 = LZ / 2;
+   848→  // upstream continuation (covers the corners too)
+   849→  group.add(farPatch(-150, 0, -E, E, 30, 68));
+   850→  // downstream continuation toward the horizon
+   851→  group.add(farPatch(LX, LX + 150, -E, E, 30, 68));
+   852→  // side ranges
+   853→  group.add(farPatch(0, LX, Z0 - E, Z0, 44, 30));
+   854→  group.add(farPatch(0, LX, Z1, Z1 + E, 44, 30));
+   855→  return { group };
+   856→}
+   857→
