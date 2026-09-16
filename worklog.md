@@ -427,3 +427,90 @@ Stage Summary:
   refresh during automated tests (sim ~0.1 s per wall-s); real browsers run at
   full speed. A leaked Fast-Refresh context can double-post twin state during
   live HMR editing in dev — harmless to solver integrity, disappears on reload.
+
+---
+Task ID: world-v2-powerhouse-town-sensors
+Agent: Super Z (main agent)
+Task: Physical-model expansion per user reference image — sensors kept ON the dam
+crest line and ON the earth at the base, a hydroelectric turbine/powerhouse as
+part of the dam, dam structure completed into both abutments (sides were cut
+off / water visible through them), and an open-world city map enclosing the
+dam (game-style), plus any additional useful sensors at best locations.
+
+Work Log:
+- terrain.ts: (a) abutment-shoulder term — near the dam (|x-112|<30) the valley
+  walls now rise just above crest (+min(t,0.9)*9) so the monoliths key into
+  solid rock and the reservoir shoreline tucks against the flanks (fixes the
+  sliced-water-edge look at the dam ends); (b) downstream valley widening
+  (w0 += (x-112)*0.34) — the gorge opens into a broad floodplain where the
+  river town stands; (c) terrainColor: warm granite base + scrub-vegetation
+  term on mid slopes (smoothstep 0.95→0.35 slope, fade by b 42) so gorge walls
+  no longer read as bare gray.
+- props.ts: outer monoliths extended z ±38 → ±46 (ends buried in the raised
+  flanks), crest road/railings/lamps extended to ±46/±42, stepped abutment
+  gallery blocks at both flank contacts, stain band widened to 88.
+- world.ts (NEW ~700 lines): buildPowerhouse() — reservoir intake tower with
+  trash racks + gantry + service bridge + submerged feed conduit, two steel
+  penstocks down the downstream face (collars), powerhouse hall at the toe with
+  open downstream bay showing 2 turbine-generator units (spiral casing,
+  generator barrel, 4-spoke flywheel ROTORS that spin ∝ discharge), tailrace
+  guide walls, transformer yard + switch gantry, 4 lattice pylons + 9 catenary
+  cables to the town substation; buildTown() — 10-street grid on both banks,
+  ~150-window-textured instanced buildings + roof slabs (deterministic scatter,
+  slope/street/river filters), clock tower with 4 canvas clock faces + plaza,
+  water tower, market canopy, football pitch (canvas markings), temple, park
+  grove + benches, instanced streetlights, farmland patches, light-industry
+  sheds near the dam; buildFarTerrain() — 4 visual-only patches beyond the
+  solver domain (valley continuations + mountain ring via fbm farBed, vertex-
+  colored) replacing the flat surround plane.
+- sensors.ts: network expanded 6 → 16 channels. New: S7/S8 heel-uplift
+  piezometers (foundation, on the earth at the dam base), S9/S11 strain array,
+  S10 tilt array, S12 spillway gate position, S13 turbine vibration,
+  S14 penstock flow (face-mounted via new dy offset), S15 tailrace stage,
+  S16 weather station (rain mm/h). SensorKind → 'reservoir' | 'crest' |
+  'foundation' | 'turbine' | 'weather'; new channels added to SensorValues,
+  CHANNEL_KEY, parsePacket pick list, and the embedded simulator (uplift grows
+  with head + breach, gatePos derived from qOut, turbFlow = min(qOut*0.42,26)).
+- engine.ts: buildSensorMarker rewritten per kind (buoy / crest pedestal /
+  foundation vault+riser / turbine node+whip / weather mast with anemometer
+  cups + vane) with per-kind rest-elevation rules (crest = structBase top,
+  others = bedAt + dy); powerhouse rotors spin at 1.1+min(qOut,40)*0.42 rad/s;
+  DamStats.powerMW (demo turbine discharge × head physics); far terrain wired
+  in; maxDistance 640; camera presets retuned (overview high diorama 198,98,110
+  → 102,8,2; new 'town' preset; overview/impact/town clear the new ring).
+- glsl.ts: water shader — ripple amp 0.055→0.075, shoreline whiteness 0.30→0.18,
+  sun specular tight lobe 220/3.2 → 320/1.5 + broad 24/0.16 → 28/0.10 (the
+  mirror-flat driven lake was blowing out into white slashes along far shores).
+- panels.tsx: UIStats.powerMW; new "Powerhouse generation" panel (real-MW via
+  qScale × heightM/13, turbine discharge, units online / "curtailed — flood
+  release" with intakes-shut generation at qOut>60); packet-format docs now
+  list all 16 channels; sensor panel title uses SENSORS.length; TwinPanel
+  channel summary updated. page.tsx: 'Town' camera button.
+- Verified: tsc + eslint clean; full 16-channel hardware packet POST → ack +
+  snapshot (source=hardware, node registered); UI sensor tab shows
+  "16 DEPLOYED" cards; breach scenario end-to-end (PREPARING → BREACH FORMING
+  34% → 80%, outflow 5,652 m³/s at dam, G1 257 m³/s / 11.2 m/s, powerhouse
+  935 MW → "curtailed — flood release", hydrograph rising); solver probes
+  clean (no NaN; wet cells = reservoir+river); screenshots: overview (dam keyed
+  into both flanks, reservoir intact, town + river + bridge + pylons), dam
+  face (crest sensor array, intake tower, powerhouse), town close-up (clock
+  tower, market, pitch, water tower), sensors tab, breach/flood frames.
+- Known sandbox notes: headless rAF throttling slows sim (breach tau 15 sim-s
+  takes minutes of wall time; real browsers full speed); timeScale > ~2.2
+  exceeds the 14-substep CFL clamp and destabilises the solver (avoid in
+  tests; UI max is 4 on scenario panel only — substep clamp keeps 2.2 safe);
+  MeshDepthMaterial VALIDATE_STATUS console errors are a headless SwiftShader
+  shadow-pass quirk — shadows render correctly.
+
+Stage Summary:
+- Deliverable: DAMSAFE 3D now a complete open-world dam complex — full gravity
+  dam keyed into rock abutments, working hydro powerhouse (spinning turbines,
+  live MW), 16-sensor IoT network mapped 1:1 into the 3D twin (crest line +
+  earth/foundation + powerhouse + weather), river town with landmarks, and a
+  fogged mountain horizon. ESP32 pipeline unchanged and 16-channel ready.
+- Key files: src/lib/dam/world.ts (NEW), terrain.ts, props.ts, engine.ts,
+  glsl.ts, src/lib/damsafe/sensors.ts, src/components/damsafe/panels.tsx,
+  src/app/page.tsx.
+- Next candidates: GLB/GLTF reference-model loader (user offered real 3D
+  assets — drop into public/models + loader prop), town flood-damage states
+  for instanced buildings, Phase 2 cascade dams.

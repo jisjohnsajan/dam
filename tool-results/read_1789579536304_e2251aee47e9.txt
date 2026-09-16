@@ -1,0 +1,686 @@
+     1→'use client';
+     2→
+     3→/* The "latest ref" mirror pattern below is intentional: the engine stats callback
+     4→   is registered once and must read current React state without re-registering. */
+     5→/* eslint-disable react-hooks/immutability */
+     6→
+     7→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+     8→import { DamSim, type CamPreset, type DamStats, type LayerMode, type ScenarioParams, type SensorMarkerDef } from '@/lib/dam/engine';
+     9→import {
+    10→  TopBar, CommandCenter, ScenarioPanel, ImpactPanel, EvacPanel, DataPanel, TwinPanel,
+    11→  GaugesPanel, TimelineBar, TABS, SensorNetworkPanel, type ScenarioForm, type TabId, type UIStats, type TelemetryView,
+    12→} from '@/components/damsafe/panels';
+    13→import { Minimap } from '@/components/damsafe/minimap';
+    14→import { Panel, GradientLegend } from '@/components/damsafe/ui';
+    15→import { AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal, Zap, Waves, Droplets, DoorOpen, CloudRain, RotateCcw } from 'lucide-react';
+    16→import {
+    17→  computeRisk, computeForecast, computeImpact, computeEvac, computeValidation,
+    18→  type EvacPlan, type ImpactResult, type RiskResult, type ForecastPoint,
+    19→} from '@/lib/damsafe/analysis';
+    20→import {
+    21→  SENSORS, evaluateStates,
+    22→  type SensorState, type TelemetryPacket,
+    23→} from '@/lib/damsafe/sensors';
+    24→import {
+    25→  DAMS, SCENARIO_DEFAULTS, fmtRealTime, simLevelToFrac,
+    26→  type DamId,
+    27→} from '@/lib/damsafe/config';
+    28→
+    29→const CAMS: { id: CamPreset; label: string }[] = [
+    30→  { id: 'overview', label: 'Overview' },
+    31→  { id: 'dam', label: 'Dam face' },
+    32→  { id: 'reservoir', label: 'Reservoir' },
+    33→  { id: 'valley', label: 'Valley' },
+    34→  { id: 'top', label: 'Top' },
+    35→  { id: 'impact', label: 'Impact' },
+    36→];
+    37→
+    38→export default function Page() {
+    39→  const containerRef = useRef<HTMLDivElement | null>(null);
+    40→  const engineRef = useRef<DamSim | null>(null);
+    41→  const hydroRef = useRef<{ t: number; q: number }[][]>([[], [], [], []]);
+    42→  const tickRef = useRef(0);
+    43→
+    44→  const [ready, setReady] = useState(false);
+    45→  const [error, setError] = useState<string | null>(null);
+    46→  const [stats, setStats] = useState<UIStats | null>(null);
+    47→  const [hydro, setHydro] = useState<{ t: number; q: number }[]>([[], [], [], []][0]);
+    48→  const [gaugeIdx, setGaugeIdx] = useState(0);
+    49→
+    50→  const [damId, setDamId] = useState<DamId>('idukki');
+    51→  const [mode, setMode] = useState<'live' | 'scenario'>('live');
+    52→  const [tab, setTab] = useState<TabId>('command');
+    53→
+    54→  const [liveFrac, setLiveFrac] = useState(0.84);
+    55→  const [form, setForm] = useState<ScenarioForm>({
+    56→    levelFrac: SCENARIO_DEFAULTS.levelFrac,
+    57→    mechanism: SCENARIO_DEFAULTS.mechanism,
+    58→    breachWidthM: SCENARIO_DEFAULTS.breachWidthM,
+    59→    formationMin: SCENARIO_DEFAULTS.formationMin,
+    60→    location: SCENARIO_DEFAULTS.location,
+    61→    durationMin: SCENARIO_DEFAULTS.durationMin,
+    62→    rain: SCENARIO_DEFAULTS.rain,
+    63→  });
+    64→  const [running, setRunning] = useState(false);
+    65→
+    66→  const [layer, setLayer] = useState(0);
+    67→  const [hd, setHd] = useState(false);
+    68→  const [infra, setInfra] = useState(true);
+    69→  const [foam, setFoam] = useState(true);
+    70→  const [spray, setSpray] = useState(true);
+    71→  const [speedMap, setSpeedMap] = useState(false);
+    72→  const [sound, setSound] = useState(false);
+    73→  const [timeScale, setTimeScale] = useState(1);
+    74→  const [paused, setPaused] = useState(false);
+    75→  const [cinematic, setCinematic] = useState(false);
+    76→
+    77→  const [risk, setRisk] = useState<RiskResult | null>(null);
+    78→  const [forecast, setForecast] = useState<ForecastPoint[]>([]);
+    79→  const [impact, setImpact] = useState<ImpactResult | null>(null);
+    80→  const [evacPlans, setEvacPlans] = useState<EvacPlan[]>([]);
+    81→  const [validation, setValidation] = useState<ReturnType<typeof computeValidation> | null>(null);
+    82→  const [scrubIdx, setScrubIdx] = useState<number | null>(null);
+    83→  const [snapInfo, setSnapInfo] = useState<{ count: number; times: number[] }>({ count: 0, times: [] });
+    84→
+    85→  // ---- IoT telemetry (ESP32 hardware ⇄ embedded simulator)
+    86→  const [telemetry, setTelemetry] = useState<TelemetryView | null>(null);
+    87→  const [telemetryHistory, setTelemetryHistory] = useState<TelemetryPacket[]>([]);
+    88→  // SSR-safe default: the twin never steers itself from simulated packets;
+    89→  // hardware stage readings take over only when the user enables it.
+    90→  const [drivesTwin, setDrivesTwin] = useState(false);
+    91→  const structRef = useRef<{ strain: number; tilt: number; seepage: number } | undefined>(undefined);
+    92→  const scenActiveRef = useRef(false);
+    93→  const statsRef = useRef<UIStats | null>(null);
+    94→
+    95→  // SSR-safe defaults (false) — real viewport-based values are applied after
+    96→  // mount in an effect, otherwise the server HTML mismatches (hydration error).
+    97→  const [showLeft, setShowLeft] = useState(false);
+    98→  const [showRight, setShowRight] = useState(false);
+    99→  const [rainOn, setRainOn] = useState(false);
+   100→
+   101→  useEffect(() => {
+   102→    setShowLeft(window.innerWidth >= 1100);
+   103→    setShowRight(window.innerWidth >= 900);
+   104→  }, []);
+   105→
+   106→  // ---- engine lifecycle
+   107→  useEffect(() => {
+   108→    const el = containerRef.current;
+   109→    if (!el) return;
+   110→    let eng: DamSim | null = null;
+   111→    const id = setTimeout(() => {
+   112→      try {
+   113→        eng = new DamSim(el);
+   114→        eng.onStats = (s: DamStats) => {
+   115→          setReady(true);
+   116→          setStats(s);
+   117→          scenActiveRef.current = s.scenarioActive;
+   118→          statsRef.current = s;
+   119→          for (let gi = 0; gi < 4; gi++) {
+   120→            const h = hydroRef.current[gi];
+   121→            const g = s.gauges[gi];
+   122→            if (!g) continue;
+   123→            h.push({ t: s.t, q: g.q });
+   124→            if (h.length > 700) h.shift();
+   125→          }
+   126→          tickRef.current++;
+   127→          if (tickRef.current % 3 === 0) {
+   128→            setHydro([...hydroRef.current[gaugeIdxRef.current]]);
+   129→            if (engineRef.current) {
+   130→              const down = engineRef.current.getDownsample();
+   131→              const prof = engineRef.current.profile;
+   132→              const imp = computeImpact(prof, down, down.arr, prof.timeMinPerSec);
+   133→              setImpact(imp);
+   134→              setEvacPlans(computeEvac(prof, imp).plans);
+   135→              setValidation(computeValidation(down));
+   136→              setRisk(computeRisk(prof, liveFracRef.current, s.levelFrac, s.riseMPerHr, 8 * prof.qScale, 0, structRef.current));
+   137→              setForecast(computeForecast(prof, liveFracRef.current, s.riseMPerHr, 0));
+   138→            }
+   139→          }
+   140→        };
+   141→        eng.onError = (m) => setError(m);
+   142→        engineRef.current = eng;
+   143→        // keep a freshly (re)created engine consistent with current React state
+   144→        // (Fast Refresh / StrictMode remounts must not snap the lake back to
+   145→        // the default level while hardware telemetry is steering it)
+   146→        eng.setLiveLevel(liveFracRef.current);
+   147→        setTimeout(() => setReady(true), 800);
+   148→      } catch (e) {
+   149→        setError(e instanceof Error ? e.message : String(e));
+   150→      }
+   151→    }, 0);
+   152→    return () => {
+   153→      clearTimeout(id);
+   154→      eng?.dispose();
+   155→      engineRef.current = null;
+   156→    };
+   157→  }, []);
+   158→
+   159→  // refs mirroring state for the engine stats callback (latest-ref pattern)
+   160→  const gaugeIdxRef = useRef(gaugeIdx);
+   161→  gaugeIdxRef.current = gaugeIdx;
+   162→  const liveFracRef = useRef(liveFrac);
+   163→  liveFracRef.current = liveFrac;
+   164→
+   165→  // ---- controls
+   166→  const onLevel = useCallback((f: number) => {
+   167→    setLiveFrac(f);
+   168→    engineRef.current?.setLiveLevel(f);
+   169→  }, []);
+   170→
+   171→  const onDam = useCallback((d: DamId) => {
+   172→    setDamId(d);
+   173→    hydroRef.current = [[], [], [], []];
+   174→    setHydro([]);
+   175→    engineRef.current?.setDam(d, liveFracRef.current);
+   176→  }, []);
+   177→
+   178→  const onLayer = useCallback((m: number) => {
+   179→    setLayer(m);
+   180→    engineRef.current?.setLayer(m as LayerMode);
+   181→  }, []);
+   182→
+   183→  const launchScenario = useCallback((p: ScenarioParams) => {
+   184→    const eng = engineRef.current;
+   185→    if (!eng) return;
+   186→    if (eng.scenarioActive) eng.reset(); // allow instant switch between scenarios
+   187→    setRunning(true);
+   188→    setMode('scenario');
+   189→    setScrubIdx(null);
+   190→    setForm((f) => ({ ...f, ...p }));
+   191→    hydroRef.current = [[], [], [], []];
+   192→    setHydro([]);
+   193→    eng.runScenario(p);
+   194→    // unlock timeline data
+   195→    setTimeout(() => {
+   196→      const e2 = engineRef.current;
+   197→      if (e2) setSnapInfo({ count: e2.snapCount, times: e2.snapTimes });
+   198→    }, 500);
+   199→  }, []);
+   200→
+   201→  const onRun = useCallback(() => {
+   202→    launchScenario({
+   203→      levelFrac: form.levelFrac,
+   204→      mechanism: form.mechanism,
+   205→      breachWidthM: form.breachWidthM,
+   206→      formationMin: form.formationMin,
+   207→      location: form.location,
+   208→      rain: form.rain,
+   209→    });
+   210→  }, [form, launchScenario]);
+   211→
+   212→  const onReset = useCallback(() => {
+   213→    const eng = engineRef.current;
+   214→    if (!eng) return;
+   215→    eng.reset();
+   216→    setRunning(false);
+   217→    setMode('live');
+   218→    setScrubIdx(null);
+   219→    setImpact(null);
+   220→    setValidation(null);
+   221→    setEvacPlans([]);
+   222→    setSnapInfo({ count: 0, times: [] });
+   223→    hydroRef.current = [[], [], [], []];
+   224→    setHydro([]);
+   225→  }, []);
+   226→
+   227→  // one-click demo actions (flood / dam break / piping / gates / storm / reset)
+   228→  const onQuick = useCallback((id: string) => {
+   229→    const eng = engineRef.current;
+   230→    if (!eng) return;
+   231→    switch (id) {
+   232→      case 'breach':
+   233→        launchScenario({ levelFrac: 0.92, mechanism: 'structural', breachWidthM: 100, formationMin: 20, location: 'center', rain: 'none' });
+   234→        break;
+   235→      case 'overtop':
+   236→        launchScenario({ levelFrac: 1.06, mechanism: 'overtopping', breachWidthM: 120, formationMin: 30, location: 'center', rain: 'heavy' });
+   237→        break;
+   238→      case 'piping':
+   239→        launchScenario({ levelFrac: 0.95, mechanism: 'piping', breachWidthM: 70, formationMin: 40, location: 'left', rain: 'moderate' });
+   240→        break;
+   241→      case 'gates':
+   242→        eng.openGates();
+   243→        break;
+   244→      case 'storm': {
+   245→        const next = !rainOn;
+   246→        setRainOn(next);
+   247→        eng.setRain(next ? 'heavy' : 'none');
+   248→        break;
+   249→      }
+   250→      case 'reset':
+   251→        eng.setRain('none');
+   252→        setRainOn(false);
+   253→        onReset();
+   254→        break;
+   255→    }
+   256→  }, [launchScenario, onReset, rainOn]);
+   257→
+   258→  // refresh snapshot list periodically while a scenario runs
+   259→  useEffect(() => {
+   260→    if (!running) return;
+   261→    const iv = setInterval(() => {
+   262→      const e = engineRef.current;
+   263→      if (e) setSnapInfo({ count: e.snapCount, times: e.snapTimes });
+   264→    }, 2000);
+   265→    return () => clearInterval(iv);
+   266→  }, [running]);
+   267→
+   268→  const onScrub = useCallback((i: number) => {
+   269→    const eng = engineRef.current;
+   270→    if (!eng) return;
+   271→    if (eng.scrubTo(i)) setScrubIdx(i);
+   272→  }, []);
+   273→
+   274→  const onLive = useCallback(() => {
+   275→    const eng = engineRef.current;
+   276→    if (!eng) return;
+   277→    eng.exitScrub();
+   278→    setScrubIdx(null);
+   279→  }, []);
+   280→
+   281→  const onRoute = useCallback((plan: EvacPlan | null) => {
+   282→    const eng = engineRef.current;
+   283→    if (!eng) return;
+   284→    if (plan) eng.drawEvacRoute(plan.route);
+   285→    else eng.clearEvacRoute();
+   286→  }, []);
+   287→
+   288→  // ---- IoT telemetry: SSE live stream (ESP32 hardware or embedded simulator)
+   289→  const drivesTwinRef = useRef(drivesTwin);
+   290→  drivesTwinRef.current = drivesTwin;
+   291→
+   292→  useEffect(() => {
+   293→    const es = new EventSource(`/api/telemetry/stream?dam=${damId}`);
+   294→    const onSnapshot = (e: MessageEvent) => {
+   295→      try {
+   296→        const d = JSON.parse(e.data) as {
+   297→          source: 'hardware' | 'simulator';
+   298→          hardwareOnline: boolean;
+   299→          latest: TelemetryPacket | null;
+   300→          packets: number;
+   301→          nodes: TelemetryView['nodes'];
+   302→        };
+   303→        setTelemetry({
+   304→          source: d.source,
+   305→          hardwareOnline: d.hardwareOnline,
+   306→          latest: d.latest,
+   307→          packetCount: d.packets ?? 0,
+   308→          nodes: d.nodes ?? [],
+   309→          lastAt: d.latest?.at ?? 0,
+   310→        });
+   311→        if (d.latest) {
+   312→          setTelemetryHistory([d.latest]);
+   313→          if (d.latest.sensors.strain !== undefined) {
+   314→            structRef.current = {
+   315→              strain: d.latest.sensors.strain,
+   316→              tilt: d.latest.sensors.tilt ?? 0.5,
+   317→              seepage: d.latest.sensors.seepage ?? 4,
+   318→            };
+   319→          }
+   320→        }
+   321→      } catch {
+   322→        /* malformed frame — next packet supersedes */
+   323→      }
+   324→    };
+   325→    const onPacket = (e: MessageEvent) => {
+   326→      try {
+   327→        const p = JSON.parse(e.data) as TelemetryPacket;
+   328→        setTelemetry((prev) => {
+   329→          const nodes = prev ? [...prev.nodes] : [];
+   330→          if (p.source === 'hardware') {
+   331→            const i = nodes.findIndex((n) => n.node === p.node);
+   332→            const entry = {
+   333→              node: p.node, at: p.at, bat: p.bat, rssi: p.rssi,
+   334→              packets: (i >= 0 ? nodes[i].packets : 0) + 1,
+   335→            };
+   336→            if (i >= 0) nodes[i] = entry;
+   337→            else nodes.push(entry);
+   338→          }
+   339→          return {
+   340→            source: p.source,
+   341→            hardwareOnline: p.source === 'hardware',
+   342→            latest: p,
+   343→            packetCount: (prev?.packetCount ?? 0) + 1,
+   344→            nodes,
+   345→            lastAt: p.at,
+   346→          };
+   347→        });
+   348→        setTelemetryHistory((h) => [...h.slice(-89), p]);
+   349→        if (p.sensors.strain !== undefined) {
+   350→          structRef.current = {
+   351→            strain: p.sensors.strain,
+   352→            tilt: p.sensors.tilt ?? 0.5,
+   353→            seepage: p.sensors.seepage ?? 4,
+   354→          };
+   355→        }
+   356→        // data-driven twin: hardware stage readings steer the reservoir in live mode
+   357→        if (drivesTwinRef.current && p.source === 'hardware' && !scenActiveRef.current) {
+   358→          const lv = p.sensors.level;
+   359→          if (lv !== undefined) {
+   360→            const frac = Math.min(simLevelToFrac(lv), 1);
+   361→            engineRef.current?.setLiveLevel(frac);
+   362→            setLiveFrac(frac);
+   363→          }
+   364→        }
+   365→      } catch {
+   366→        /* malformed frame — next packet supersedes */
+   367→      }
+   368→    };
+   369→    es.addEventListener('snapshot', onSnapshot as EventListener);
+   370→    es.addEventListener('packet', onPacket as EventListener);
+   371→    return () => {
+   372→      es.removeEventListener('snapshot', onSnapshot as EventListener);
+   373→      es.removeEventListener('packet', onPacket as EventListener);
+   374→      es.close();
+   375→    };
+   376→  }, [damId]);
+   377→
+   378→  // ---- push twin solver state to the ingestion service (simulator mirrors it)
+   379→  useEffect(() => {
+   380→    const iv = setInterval(() => {
+   381→      const s = statsRef.current;
+   382→      if (!s) return;
+   383→      fetch('/api/telemetry/state', {
+   384→        method: 'POST',
+   385→        headers: { 'Content-Type': 'application/json' },
+   386→        body: JSON.stringify({
+   387→          dam: damId,
+   388→          levelFrac: s.levelFrac,
+   389→          level: s.level,
+   390→          inflow: s.inflow,
+   391→          qOut: s.qOut,
+   392→          breach01: s.breach01,
+   393→          vmax: s.vmax,
+   394→        }),
+   395→        keepalive: true,
+   396→      }).catch(() => {
+   397→        /* telemetry link loss is non-fatal for the twin */
+   398→      });
+   399→    }, 2000);
+   400→    return () => clearInterval(iv);
+   401→  }, [damId]);
+   402→
+   403→  // ---- map sensor states onto the 3D marker layer
+   404→  const sensorDefs = useMemo<SensorMarkerDef[]>(() => {
+   405→    const states = telemetry?.latest
+   406→      ? evaluateStates(telemetry.latest)
+   407→      : ({} as Record<string, SensorState>);
+   408→    return SENSORS.map((s) => ({
+   409→      id: s.id,
+   410→      x: s.x,
+   411→      z: s.z,
+   412→      kind: s.kind,
+   413→      state: states[s.id] ?? 'ok',
+   414→      label: s.name,
+   415→    }));
+   416→  }, [telemetry?.latest]);
+   417→
+   418→  useEffect(() => {
+   419→    engineRef.current?.setSensors(sensorDefs);
+   420→  }, [sensorDefs]);
+   421→
+   422→  const getFlow = useCallback(() => {
+   423→    const e = engineRef.current;
+   424→    if (!e) return null;
+   425→    const d = e.getDownsample();
+   426→    return { data: d.data, w: d.w, h: d.h };
+   427→  }, []);
+   428→
+   429→  const onFocusCam = useCallback((x: number, z: number) => {
+   430→    engineRef.current?.focusOn(x, z, 30);
+   431→  }, []);
+   432→
+   433→  const dam = DAMS[damId];
+   434→
+   435→  // stage-aware banner text (null = hidden)
+   436→  const stageInfo = (() => {
+   437→    if (!running || !stats) return null;
+   438→    const s = stats.stage;
+   439→    if (s <= 1) return { text: 'PREPARING RESERVOIR…', alert: false };
+   440→    if (s === 2) return { text: 'RESERVOIR SURCHARGING…', alert: false };
+   441→    if (s === 3) return { text: `SIMULATED DAM FAILURE · BREACH FORMING ${Math.round(stats.breach01 * 100)}%`, alert: true };
+   442→    if (s === 4) return { text: `FLOOD WAVE PROPAGATING · T+${fmtRealTime(stats.realMin)}`, alert: true };
+   443→    return stats.progress01 < 0.999
+   444→      ? { text: 'PROCESSING FLOOD IMPACTS…', alert: false }
+   445→      : { text: 'SCENARIO COMPLETE — SEE IMPACT & EVACUATION TABS', alert: false };
+   446→  })();
+   447→  const stageText = stageInfo?.text ?? null;
+   448→  const stageAlert = stageInfo?.alert ?? false;
+   449→
+   450→  return (
+   451→    <main className="fixed inset-0 overflow-hidden bg-[#060b14]" aria-label="DAMSAFE 3D dam risk and flood digital twin">
+   452→      {/* 3D canvas */}
+   453→      <div ref={containerRef} className="absolute inset-0" />
+   454→
+   455→      {/* cinematic letterbox */}
+   456→      <div className={`pointer-events-none absolute inset-x-0 top-0 z-30 bg-black transition-all duration-700 ${cinematic ? 'h-[7vh]' : 'h-0'}`} />
+   457→      <div className={`pointer-events-none absolute inset-x-0 bottom-0 z-30 bg-black transition-all duration-700 ${cinematic ? 'h-[7vh]' : 'h-0'}`} />
+   458→
+   459→      {/* top bar */}
+   460→      {!cinematic && (
+   461→        <TopBar damId={damId} onDam={onDam} mode={mode} onMode={setMode} tab={tab} onTab={setTab} hardwareOnline={telemetry?.source === 'hardware'} />
+   462→      )}
+   463→
+   464→      {/* scrub badge */}
+   465→      {scrubIdx !== null && (
+   466→        <div className="pointer-events-none absolute left-1/2 top-[86px] z-30 -translate-x-1/2">
+   467→          <span className="rounded bg-violet-900/80 px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-violet-200">
+   468→            HISTORICAL FRAME · T+{fmtRealTime((snapInfo.times[scrubIdx] ?? 0) * dam.timeMinPerSec)} · TIME MACHINE
+   469→          </span>
+   470→        </div>
+   471→      )}
+   472→
+   473→      {/* left panel per tab */}
+   474→      {!cinematic && (
+   475→        <div className={`absolute left-2 top-[112px] z-20 w-[292px] max-w-[calc(100vw-1rem)] transition-transform duration-300 ${showLeft ? 'translate-x-0' : '-translate-x-[110%]'}`}>
+   476→          <div className="max-h-[calc(100vh-190px)] overflow-y-auto pr-0.5 damsafe-scroll">
+   477→            {tab === 'command' && (
+   478→              <CommandCenter damId={damId} stats={stats} liveFrac={liveFrac} onLevel={onLevel} risk={risk} forecast={forecast} />
+   479→            )}
+   480→            {tab === 'twin' && (
+   481→              <TwinPanel
+   482→                layer={layer} onLayer={onLayer}
+   483→                hd={hd} onHd={(b) => { setHd(b); engineRef.current?.setHd(b); }}
+   484→                infra={infra} onInfra={(b) => { setInfra(b); engineRef.current?.setInfraVisible(b); }}
+   485→                foam={foam} onFoam={(b) => { setFoam(b); engineRef.current?.setFoam(b); }}
+   486→                spray={spray} onSpray={(b) => { setSpray(b); engineRef.current?.setSpray(b); }}
+   487→                speedMap={speedMap} onSpeedMap={(b) => { setSpeedMap(b); engineRef.current?.setSpeedMap(b); }}
+   488→                sound={sound} onSound={(b) => { setSound(b); engineRef.current?.setSound(b); }}
+   489→                timeScale={timeScale} onTimeScale={(v) => { setTimeScale(v); engineRef.current?.setTimeScale(v); }}
+   490→                fps={stats?.fps ?? 0}
+   491→              />
+   492→            )}
+   493→            {tab === 'sensors' && (
+   494→              <SensorNetworkPanel
+   495→                telemetry={telemetry}
+   496→                history={telemetryHistory}
+   497→                drivesTwin={drivesTwin}
+   498→                onDrivesTwin={setDrivesTwin}
+   499→                damId={damId}
+   500→                onFocusSensor={onFocusCam}
+   501→              />
+   502→            )}
+   503→            {tab === 'scenarios' && (
+   504→              <ScenarioPanel form={form} onChange={(p) => setForm((f) => ({ ...f, ...p }))} onRun={onRun} onReset={onReset} running={running} stats={stats} damId={damId} />
+   505→            )}
+   506→            {tab === 'impact' && (
+   507→              <ImpactPanel impact={impact} damId={damId} onFocus={(x, z) => engineRef.current?.focusOn(x, z)} />
+   508→            )}
+   509→            {tab === 'evac' && (
+   510→              <EvacPanel plans={evacPlans} shelters={dam.shelters.map((s) => ({ name: s.name, capacity: s.capacity, risk: 'LOW' }))} onRoute={onRoute} impact={impact} />
+   511→            )}
+   512→            {tab === 'data' && <DataPanel validation={validation} telemetry={telemetry} />}
+   513→          </div>
+   514→        </div>
+   515→      )}
+   516→
+   517→      {!cinematic && (
+   518→        <button
+   519→          aria-label={showLeft ? 'Hide controls' : 'Show controls'}
+   520→          onClick={() => setShowLeft((v) => !v)}
+   521→          className="absolute top-[112px] z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-[#0a1526]/85 text-slate-300 backdrop-blur-md hover:bg-[#12213a]/90"
+   522→          style={{ left: showLeft ? 302 : 10 }}
+   523→        >
+   524→          {showLeft ? <ChevronLeft className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}
+   525→        </button>
+   526→      )}
+   527→
+   528→      {/* right column: situation map + gauge network */}
+   529→      {!cinematic && (
+   530→        <>
+   531→          <div className={`absolute right-2 top-[112px] z-20 flex w-[280px] max-w-[calc(100vw-1rem)] flex-col gap-2 transition-transform duration-300 ${showRight ? 'translate-x-0' : 'translate-x-[110%]'}`}>
+   532→            <Minimap damId={damId} sensors={sensorDefs} getFlow={getFlow} onFocus={onFocusCam} />
+   533→            <div className="min-h-0 overflow-y-auto pr-0.5 damsafe-scroll" style={{ maxHeight: 'calc(100vh - 402px)' }}>
+   534→              <GaugesPanel stats={stats} hydro={hydro} gaugeIdx={gaugeIdx} onGauge={setGaugeIdx} risk={risk} damId={damId} />
+   535→            </div>
+   536→          </div>
+   537→          <button
+   538→            aria-label={showRight ? 'Hide gauges' : 'Show gauges'}
+   539→            onClick={() => setShowRight((v) => !v)}
+   540→            className="absolute right-2 top-[112px] z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-[#0a1526]/85 text-slate-300 backdrop-blur-md hover:bg-[#12213a]/90"
+   541→            style={{ right: showRight ? 290 : 10 }}
+   542→          >
+   543→            {showRight ? <ChevronRight className="h-4 w-4" /> : <SlidersHorizontal className="h-4 w-4" />}
+   544→          </button>
+   545→        </>
+   546→      )}
+   547→
+   548→      {/* layer legends */}
+   549→      {!cinematic && layer === 1 && (
+   550→        <div className="absolute bottom-[146px] left-2 z-20 hidden md:block">
+   551→          <GradientLegend
+   552→            title="FLOOD DEPTH · m"
+   553→            stops={['#2988bf', '#1a6ba6', '#0f4085', '#081c57']}
+   554→            labels={['0', '4', '8+']}
+   555→          />
+   556→        </div>
+   557→      )}
+   558→      {!cinematic && layer === 2 && (
+   559→        <div className="absolute bottom-[146px] left-2 z-20 hidden md:block">
+   560→          <GradientLegend
+   561→            title="FLOW VELOCITY · m/s"
+   562→            stops={['rgb(0,60,150)', 'rgb(0,192,240)', 'rgb(96,240,96)', 'rgb(240,240,64)', 'rgb(240,80,24)']}
+   563→            labels={['0', '4', '8+']}
+   564→          />
+   565→        </div>
+   566→      )}
+   567→      {!cinematic && layer === 3 && (
+   568→        <div className="absolute bottom-[146px] left-2 z-20 hidden md:block">
+   569→          <GradientLegend
+   570→            title="FLOOD ARRIVAL · after breach"
+   571→            stops={['#29bf4d', '#a6d126', '#fab819', '#e54019', '#85198c']}
+   572→            labels={['15m', '1h', '4h+']}
+   573→          />
+   574→        </div>
+   575→      )}
+   576→
+   577→      {/* one-click quick actions */}
+   578→      {!cinematic && (
+   579→        <div className="pointer-events-auto absolute bottom-[66px] left-1/2 z-20 flex w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-1.5 overflow-x-auto rounded-xl border border-cyan-100/10 bg-[#0a1526]/90 px-2 py-1.5 shadow-2xl backdrop-blur-md damsafe-scroll">
+   580→          <span className="hidden shrink-0 px-1 text-[9px] font-semibold tracking-[0.18em] text-slate-500 sm:inline">QUICK ACTIONS</span>
+   581→          {([
+   582→            { id: 'breach', label: 'Dam break', icon: <Zap className="h-3.5 w-3.5" />, cls: 'border-red-500/40 bg-red-950/70 text-red-200 hover:bg-red-900/70' },
+   583→            { id: 'overtop', label: 'Flood overtop', icon: <Waves className="h-3.5 w-3.5" />, cls: 'border-amber-500/40 bg-amber-950/60 text-amber-200 hover:bg-amber-900/60' },
+   584→            { id: 'piping', label: 'Pipe burst', icon: <Droplets className="h-3.5 w-3.5" />, cls: 'border-orange-500/40 bg-orange-950/60 text-orange-200 hover:bg-orange-900/60' },
+   585→            { id: 'gates', label: 'Open gates', icon: <DoorOpen className="h-3.5 w-3.5" />, cls: 'border-cyan-500/40 bg-cyan-950/50 text-cyan-200 hover:bg-cyan-900/50' },
+   586→            { id: 'storm', label: rainOn ? 'Stop storm' : 'Storm rain', icon: <CloudRain className="h-3.5 w-3.5" />, cls: rainOn ? 'border-indigo-300/60 bg-indigo-600/40 text-indigo-100' : 'border-indigo-500/40 bg-indigo-950/60 text-indigo-200 hover:bg-indigo-900/60' },
+   587→            { id: 'reset', label: 'Reset', icon: <RotateCcw className="h-3.5 w-3.5" />, cls: 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10' },
+   588→          ] as const).map((b) => (
+   589→            <button
+   590→              key={b.id}
+   591→              onClick={() => onQuick(b.id)}
+   592→              className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10.5px] font-semibold tracking-wide backdrop-blur-sm transition-colors ${b.cls}`}
+   593→            >
+   594→              {b.icon}
+   595→              {b.label}
+   596→            </button>
+   597→          ))}
+   598→        </div>
+   599→      )}
+   600→
+   601→      {/* animated scenario stage banner */}
+   602→      {!cinematic && stageText && (
+   603→        <div className="pointer-events-none absolute bottom-[108px] left-1/2 z-20 -translate-x-1/2">
+   604→          <span
+   605→            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1 text-[10px] font-semibold tracking-wide backdrop-blur-sm ${
+   606→              stageAlert
+   607→                ? 'bg-red-950/85 text-red-200 animate-[damsafe-alert_1.5s_ease-in-out_infinite]'
+   608→                : 'bg-[#0a1526]/85 text-cyan-200'
+   609→            }`}
+   610→          >
+   611→            {stageText}
+   612→          </span>
+   613→        </div>
+   614→      )}
+   615→
+   616→      {/* timeline */}
+   617→      {!cinematic && (
+   618→        <TimelineBar
+   619→          snapCount={snapInfo.count}
+   620→          snapTimes={snapInfo.times}
+   621→          scrubIdx={scrubIdx}
+   622→          onScrub={onScrub}
+   623→          onLive={onLive}
+   624→          paused={paused}
+   625→          onPause={() => {
+   626→            engineRef.current?.setPaused(!paused);
+   627→            setPaused(!paused);
+   628→          }}
+   629→          stats={stats}
+   630→          cams={CAMS}
+   631→          onCam={(c) => engineRef.current?.setCamera(c)}
+   632→          cinematic={cinematic}
+   633→          onCinema={() => {
+   634→            engineRef.current?.setCinematic(!cinematic);
+   635→            setCinematic(!cinematic);
+   636→          }}
+   637→          timeMinPerSec={dam.timeMinPerSec}
+   638→        />
+   639→      )}
+   640→
+   641→      {/* tab hint */}
+   642→      {!cinematic && (
+   643→        <p className="pointer-events-none absolute bottom-[60px] right-3 z-10 hidden text-[9px] text-slate-500 lg:block">
+   644→          {TABS.find((t) => t.id === tab)?.label} · Drag orbit · Scroll zoom · Right-drag pan
+   645→        </p>
+   646→      )}
+   647→
+   648→      {/* exit cinema */}
+   649→      {cinematic && (
+   650→        <button
+   651→          onClick={() => {
+   652→            engineRef.current?.setCinematic(false);
+   653→            setCinematic(false);
+   654→          }}
+   655→          className="absolute right-4 top-[calc(7vh+12px)] z-40 rounded-lg border border-white/15 bg-[#0a1526]/85 px-3 py-1.5 text-[11px] text-slate-200 backdrop-blur-md hover:bg-[#12213a]/90"
+   656→        >
+   657→          Exit cinema
+   658→        </button>
+   659→      )}
+   660→
+   661→      {/* loading / error */}
+   662→      {!ready && !error && (
+   663→        <div className="absolute inset-0 z-40 flex items-center justify-center bg-[#060b14]">
+   664→          <div className="flex flex-col items-center gap-3">
+   665→            <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+   666→            <p className="text-sm text-slate-300">Building the digital twin…</p>
+   667→            <p className="text-[10px] tracking-[0.2em] text-slate-500">DAMSAFE 3D</p>
+   668→          </div>
+   669→        </div>
+   670→      )}
+   671→      {error && (
+   672→        <div className="absolute inset-0 z-40 flex items-center justify-center bg-[#060b14]/95 p-6">
+   673→          <Panel className="max-w-md p-6 text-center">
+   674→            <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-amber-400" />
+   675→            <h2 className="mb-2 text-sm font-semibold text-slate-100">WebGL initialization failed</h2>
+   676→            <p className="text-xs leading-relaxed text-slate-400">
+   677→              This digital twin needs a WebGL2-capable browser with floating-point render targets.
+   678→              {error ? ` Detail: ${error}` : ''}
+   679→            </p>
+   680→          </Panel>
+   681→        </div>
+   682→      )}
+   683→    </main>
+   684→  );
+   685→}
+   686→

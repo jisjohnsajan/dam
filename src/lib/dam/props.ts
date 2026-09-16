@@ -142,8 +142,9 @@ export function buildDam(): DamProps {
     return m;
   };
 
-  // crest roadway + railings + lamps (across the whole dam)
-  const CREST_Z0 = -38, CREST_Z1 = 38;
+  // crest roadway + railings + lamps (across the whole dam — the outer ends
+  // run into the raised abutment rock so the structure reads as complete)
+  const CREST_Z0 = -46, CREST_Z1 = 46;
   const roadTex = makeAsphaltTex();
   roadTex.repeat.set(1, 10);
   const crestRoad = new THREE.Mesh(
@@ -179,7 +180,7 @@ export function buildDam(): DamProps {
   }
 
   // lamp posts
-  for (let z = -35; z <= 35; z += 14) {
+  for (let z = -42; z <= 42; z += 14) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 2.6, 6), steel);
     pole.position.set(DAM_X + 3.0, CREST + 1.5, z);
     pole.castShadow = true;
@@ -193,11 +194,29 @@ export function buildDam(): DamProps {
     group.add(pole, arm, head);
   }
 
-  // intact outer monoliths
-  group.add(monolith(-38, BLOCK_Z0, CREST, concrete));
+  // intact outer monoliths — extended deep into both abutments (the raised
+  // flank terrain swallows the outer ends, keying the dam into the rock)
+  group.add(monolith(-46, BLOCK_Z0, CREST, concrete));
   group.add(monolith(BLOCK_Z1, 18, CREST, concrete));
   group.add(monolith(18, 30, 22.8, concreteDark)); // spillway sill (matches SPILL_CREST_CLOSED)
-  group.add(monolith(30, 38, CREST, concrete));
+  group.add(monolith(30, 46, CREST, concrete));
+
+  // abutment contact detail: stepped gallery blocks where the monoliths meet
+  // the rising rock (small concrete steps climbing the shoulder line)
+  for (const side of [-1, 1]) {
+    for (let k = 0; k < 4; k++) {
+      const zc = side * (36.5 + k * 2.0);
+      const step = new THREE.Mesh(
+        new THREE.BoxGeometry(7.5, 1.2, 2.1),
+        concreteDark,
+      );
+      const gy = CREST - 0.2 + k * 1.2;
+      step.position.set(DAM_X + 4.3, gy, zc);
+      step.rotation.y = side * 0.06;
+      step.castShadow = step.receiveShadow = true;
+      group.add(step);
+    }
+  }
 
   // --- spillway: 3 piers, 2 radial gates, hoist bridge, trunnion arms
   const pierZ = [18.7, 24.0, 29.3];
@@ -244,7 +263,7 @@ export function buildDam(): DamProps {
 
   // upstream algal stain band (slightly proud of the face, subtle)
   const stainBand = new THREE.Mesh(
-    new THREE.BoxGeometry(0.08, 2.0, 76),
+    new THREE.BoxGeometry(0.08, 2.0, 88),
     new THREE.MeshStandardMaterial({ color: 0x6b7362, roughness: 0.95, transparent: true, opacity: 0.16 }),
   );
   stainBand.position.set(DAM_X - 0.05, RES_LEVEL - 0.6, 0);

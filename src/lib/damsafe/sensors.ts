@@ -1,7 +1,8 @@
 // DAMSAFE 3D — IoT sensor network definitions & telemetry packet contract.
 //
 // The deployed hardware (Phase 1): one ESP32 master node at the dam site polls
-// 6 sensors and POSTs a JSON packet to /api/telemetry every second:
+// a 16-channel sensor array and POSTs a JSON packet to /api/telemetry every
+// second:
 //
 //   {
 //     "dam":  "idukki",              // dam namespace (multi-dam ready, Phase 2)
@@ -12,7 +13,8 @@
 //       "pressure": 9.6,           // S3 submerged transducer head (m of water)
 //       "strain": 241.5,           // S4 strain gauge on dam wall (micro-strain)
 //       "tilt": 0.62,              // S5 crest tiltmeter (mrad)
-//       "seepage": 5.1             // S6 foundation piezometer / seepage weir (L/min)
+//       "seepage": 5.1,            // S6 foundation piezometer / seepage weir (L/min)
+//       ... crest array, foundation uplift, gate, turbine, tailrace, weather
 //     },
 //     "bat": 3.94,                 // node supply voltage (V)
 //     "rssi": -63                  // Wi-Fi RSSI (dBm)
@@ -26,8 +28,11 @@
 
 // Sensor positions live in the solver's demo world: x < 112 (dam face) =
 // upstream reservoir reach, x ≥ 112 = dam wall & downstream valley.
+// Kinds: reservoir (floating buoy) · crest (pedestal on the dam wall, the red
+// reference marks along the top) · foundation (vault on the earth at the dam
+// base) · turbine (powerhouse node) · weather (mast on the abutment).
 
-export type SensorKind = 'reservoir' | 'structure';
+export type SensorKind = 'reservoir' | 'crest' | 'foundation' | 'turbine' | 'weather';
 export type SensorState = 'ok' | 'warn' | 'alarm';
 
 export interface SensorDef {
@@ -39,6 +44,8 @@ export interface SensorDef {
   // demo-world position (metres, solver coordinates)
   x: number;
   z: number;
+  // optional elevation offset for face-mounted nodes (penstock etc.)
+  dy?: number;
   // operational thresholds (in sensor units)
   warn: number;
   alarm: number;
@@ -49,8 +56,10 @@ export interface SensorDef {
 }
 
 // ---------------------------------------------------------------- sensor layout
-// 3 reservoir / underwater sensors + 3 dam-wall & bedding sensors, mapped into
-// the demo solver world so their 3D markers and map pins sit on real geometry.
+// 3 reservoir / underwater sensors + the crest instrumentation array along the
+// dam wall + foundation uplift piezometers on the earth at the base + powerhouse
+// condition monitoring + tailrace + weather station, all mapped into the demo
+// solver world so their 3D markers and map pins sit on real geometry.
 export const SENSORS: SensorDef[] = [
   {
     id: 'S1', name: 'Reservoir stage', hardware: 'JSN-SR04T ultrasonic',
@@ -71,22 +80,82 @@ export const SENSORS: SensorDef[] = [
     desc: 'Hydrostatic head on the upstream face near the heel.',
   },
   {
-    id: 'S4', name: 'Wall strain', hardware: 'Vibrating-wire strain gauge',
-    kind: 'structure', unit: 'με', x: 114.6, z: -6,
+    id: 'S4', name: 'Wall strain A', hardware: 'Vibrating-wire strain gauge',
+    kind: 'crest', unit: 'με', x: 114.6, z: -6,
     warn: 320, alarm: 430, base: 228, span: 3.5,
     desc: 'Concrete compressive strain mid-height on the dam wall.',
   },
   {
-    id: 'S5', name: 'Crest tilt', hardware: 'MEMS biaxial tiltmeter',
-    kind: 'structure', unit: 'mrad', x: 113.2, z: 4.5,
+    id: 'S5', name: 'Crest tilt A', hardware: 'MEMS biaxial tiltmeter',
+    kind: 'crest', unit: 'mrad', x: 113.2, z: 4.5,
     warn: 1.4, alarm: 2.2, base: 0.55, span: 0.03,
     desc: 'Structural rotation / micro-movement at the crest.',
   },
   {
     id: 'S6', name: 'Foundation seepage', hardware: 'Piezometer + weir',
-    kind: 'structure', unit: 'L/min', x: 121.5, z: 2,
+    kind: 'foundation', unit: 'L/min', x: 121.5, z: 2,
     warn: 14, alarm: 26, base: 4.6, span: 0.25,
     desc: 'Seepage through the foundation bedding and uplift drain.',
+  },
+  {
+    id: 'S7', name: 'Heel uplift · left', hardware: 'Embedded piezometer (earth)',
+    kind: 'foundation', unit: 'mH₂O', x: 120.4, z: -11.5,
+    warn: 7.8, alarm: 9.6, base: 3.4, span: 0.12,
+    desc: 'Uplift pressure in the foundation contact under the left block line.',
+  },
+  {
+    id: 'S8', name: 'Heel uplift · right', hardware: 'Embedded piezometer (earth)',
+    kind: 'foundation', unit: 'mH₂O', x: 120.4, z: 11.5,
+    warn: 7.8, alarm: 9.6, base: 3.5, span: 0.12,
+    desc: 'Uplift pressure in the foundation contact under the right block line.',
+  },
+  {
+    id: 'S9', name: 'Wall strain B', hardware: 'Vibrating-wire strain gauge',
+    kind: 'crest', unit: 'με', x: 114.6, z: -16,
+    warn: 310, alarm: 420, base: 220, span: 3.5,
+    desc: 'Strain array, left abutment block line of the crest.',
+  },
+  {
+    id: 'S10', name: 'Crest tilt B', hardware: 'MEMS biaxial tiltmeter',
+    kind: 'crest', unit: 'mrad', x: 113.6, z: 14,
+    warn: 1.5, alarm: 2.4, base: 0.5, span: 0.03,
+    desc: 'Rotation at the spillway pier line of the crest.',
+  },
+  {
+    id: 'S11', name: 'Wall strain C', hardware: 'Vibrating-wire strain gauge',
+    kind: 'crest', unit: 'με', x: 114.6, z: -24,
+    warn: 315, alarm: 425, base: 224, span: 3.5,
+    desc: 'Strain array, far-left crest monitoring station.',
+  },
+  {
+    id: 'S12', name: 'Spillway gate opening', hardware: 'Gate position encoder',
+    kind: 'crest', unit: '%', x: 116.4, z: 24,
+    warn: 60, alarm: 85, base: 0, span: 1.2,
+    desc: 'Radial gate opening at the spillway bay (0 = closed).',
+  },
+  {
+    id: 'S13', name: 'Turbine vibration', hardware: 'Accelerometer (ISO 10816)',
+    kind: 'turbine', unit: 'mm/s', x: 125.2, z: -26,
+    warn: 4.5, alarm: 6.5, base: 1.1, span: 0.1,
+    desc: 'Unit 1 bearing vibration in the powerhouse.',
+  },
+  {
+    id: 'S14', name: 'Penstock flow', hardware: 'Magnetic flow meter',
+    kind: 'turbine', unit: 'm³/s', x: 119.2, z: -22.5, dy: 3.4,
+    warn: 22, alarm: 30, base: 11, span: 0.5,
+    desc: 'Turbine discharge through the penstock bend.',
+  },
+  {
+    id: 'S15', name: 'Tailrace stage', hardware: 'JSN-SR04T ultrasonic',
+    kind: 'reservoir', unit: 'm', x: 133, z: 3,
+    warn: 2.6, alarm: 3.6, base: 0.9, span: 0.06,
+    desc: 'Water depth at the tailrace confluence below the powerhouse.',
+  },
+  {
+    id: 'S16', name: 'Weather station', hardware: 'Rain gauge + anemometer',
+    kind: 'weather', unit: 'mm/h', x: 117, z: 37.5,
+    warn: 25, alarm: 60, base: 0.4, span: 1.5,
+    desc: 'Rainfall intensity on the right abutment crest.',
   },
 ];
 
@@ -96,12 +165,22 @@ export const SENSOR_BY_ID: Record<string, SensorDef> = Object.fromEntries(
 
 // ---------------------------------------------------------------- packet types
 export interface SensorValues {
-  level?: number;   // S1 demo metres
-  inflowV?: number; // S2 m/s
-  pressure?: number;// S3 mH₂O
-  strain?: number;  // S4 με
-  tilt?: number;    // S5 mrad
-  seepage?: number; // S6 L/min
+  level?: number;    // S1 demo metres
+  inflowV?: number;  // S2 m/s
+  pressure?: number; // S3 mH₂O
+  strain?: number;   // S4 με
+  tilt?: number;     // S5 mrad
+  seepage?: number;  // S6 L/min
+  upliftL?: number;  // S7 mH₂O
+  upliftR?: number;  // S8 mH₂O
+  strainB?: number;  // S9 με
+  tiltB?: number;    // S10 mrad
+  strainC?: number;  // S11 με
+  gatePos?: number;  // S12 %
+  turbVib?: number;  // S13 mm/s
+  turbFlow?: number; // S14 m³/s
+  tailLevel?: number;// S15 m
+  rain?: number;     // S16 mm/h
 }
 
 export interface TelemetryPacket {
@@ -123,6 +202,16 @@ export const CHANNEL_KEY: Record<string, keyof SensorValues> = {
   S4: 'strain',
   S5: 'tilt',
   S6: 'seepage',
+  S7: 'upliftL',
+  S8: 'upliftR',
+  S9: 'strainB',
+  S10: 'tiltB',
+  S11: 'strainC',
+  S12: 'gatePos',
+  S13: 'turbVib',
+  S14: 'turbFlow',
+  S15: 'tailLevel',
+  S16: 'rain',
 };
 
 export interface TwinStateSnapshot {
@@ -153,6 +242,8 @@ export function parsePacket(body: unknown, damId: string, seq: number): Telemetr
     }
   };
   pick('level'); pick('inflowV'); pick('pressure'); pick('strain'); pick('tilt'); pick('seepage');
+  pick('upliftL'); pick('upliftR'); pick('strainB'); pick('tiltB'); pick('strainC');
+  pick('gatePos'); pick('turbVib'); pick('turbFlow'); pick('tailLevel'); pick('rain');
   if (!any) return null;
   return {
     dam: typeof b.dam === 'string' && b.dam ? b.dam : damId,
@@ -199,12 +290,29 @@ export function simulatePacket(twin: TwinStateSnapshot | null, dam: string, seq:
   const inflowV = 0.55 + surge * 2.6 + wob(1.1) * 0.06 + Math.random() * 0.04;
   // S3 hydrostatic head on the face: stage minus heel bed elevation (~11.9)
   const pressure = Math.max(0.2, level - 11.9) + wob(0.5) * 0.012;
-  // S4 strain: dead load + hydrostatic load ∝ depth², relieved by a breach
+  // S4/S9/S11 strain: dead load + hydrostatic load ∝ depth², relieved by a breach
   const strain = 96 + frac * frac * 168 + breach * -34 + wob(1.7) * 1.6;
-  // S5 tilt: creep with load, kicks visibly when the wall is failing
+  const strainB = 92 + frac * frac * 158 + breach * -30 + wob(1.9) * 1.5;
+  const strainC = 96 + frac * frac * 152 + breach * -32 + wob(1.5) * 1.5;
+  // S5/S10 tilt: creep with load, kicks visibly when the wall is failing
   const tilt = 0.32 + frac * 0.28 + breach * breach * 2.4 + wob(0.9) * 0.012;
-  // S6 seepage: grows steeply with head; a forming pipe surges the drain flow
+  const tiltB = 0.28 + frac * 0.27 + breach * breach * 2.1 + wob(1.1) * 0.011;
+  // S6/S7/S8 seepage & foundation uplift: grow steeply with head; a forming
+  // pipe surges the drains and the under-base uplift pressure
   const seepage = 1.4 + Math.pow(frac, 3) * 9.5 + breach * 17 + wob(1.3) * 0.14;
+  const upliftL = 2.6 + frac * 4.6 + breach * 5.8 + wob(0.8) * 0.09;
+  const upliftR = 2.7 + frac * 4.5 + breach * 5.4 + wob(0.9) * 0.09;
+  // S12 spillway gate opening: derived from the outflow release signal
+  const qOut = twin ? twin.qOut : 8;
+  const gatePos = Math.min(Math.max((qOut - 18) / 40, 0), 1) * 100;
+  // S13/S14 powerhouse condition monitoring
+  const turbVib = 0.9 + Math.min(qOut, 30) * 0.11 + wob(2.3) * 0.13;
+  const turbFlow = Math.min(qOut * 0.42, 26) * (0.96 + wob(1.4) * 0.03);
+  // S15 tailrace stage below the powerhouse
+  const tailLevel = 0.55 + Math.min(qOut, 60) * 0.045 + breach * 0.6 + wob(1.2) * 0.03;
+  // S16 rainfall intensity (mirrors the twin's inflow surge)
+  const inflow = twin ? twin.inflow : 8;
+  const rain = Math.max(0, (inflow - 9) * 1.7) + Math.abs(wob(0.6)) * 0.4;
 
   return {
     dam,
@@ -219,6 +327,16 @@ export function simulatePacket(twin: TwinStateSnapshot | null, dam: string, seq:
       strain,
       tilt: Math.max(0, tilt),
       seepage: Math.max(0, seepage),
+      upliftL: Math.max(0, upliftL),
+      upliftR: Math.max(0, upliftR),
+      strainB,
+      tiltB: Math.max(0, tiltB),
+      strainC,
+      gatePos,
+      turbVib: Math.max(0, turbVib),
+      turbFlow: Math.max(0, turbFlow),
+      tailLevel: Math.max(0, tailLevel),
+      rain: Math.max(0, rain),
     },
     bat: 3.92 + wob(0.05) * 0.05,
     rssi: -58 + Math.round(wob(0.23) * 6),

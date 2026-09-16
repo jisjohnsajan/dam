@@ -475,8 +475,8 @@ void main() {
   float n2 = vnoise(vWorld.xz * 2.6 - vec2(uTime * 1.1, uTime * 0.8) + flowOff);
   float n3 = vnoise(vWorld.xz * 6.5 + vec2(uTime * 1.9, -uTime * 1.4));
   float n4 = vnoise(vWorld.xz * 14.0 + vec2(uTime * 3.4, uTime * 2.7));
-  vec3 rip = vec3(n1 - 0.5, 0.0, n2 - 0.5) * (0.055 * (1.0 + uRain * 1.3))
-           + vec3(n3 - 0.5, 0.0, n1 - 0.5) * (0.022 * (1.0 + uRain * 2.0))
+  vec3 rip = vec3(n1 - 0.5, 0.0, n2 - 0.5) * (0.075 * (1.0 + uRain * 1.3))
+           + vec3(n3 - 0.5, 0.0, n1 - 0.5) * (0.03 * (1.0 + uRain * 2.0))
            + vec3(n4 - 0.5, 0.0, n3 - 0.5) * (0.05 * uRain);
   N = normalize(N + rip);
 
@@ -501,12 +501,14 @@ void main() {
 
   // foam + shoreline whiteness
   float foam = texture2D(uFoam, vUvw).r;
-  float shore = smoothstep(0.30, 0.03, depth) * 0.30;
+  float shore = smoothstep(0.30, 0.03, depth) * 0.18;
   body = mix(body, vec3(0.90, 0.94, 0.97), clamp(foam, 0.0, 1.0) * 0.85 + shore);
 
-  // sun specular: tight glitter + broad gloss (damped under overcast)
+  // sun specular: tight glitter + broad gloss (damped under overcast).
+  // The drive keeps the lake mirror-flat, so the tight lobe is capped low —
+  // otherwise it blows out into long white slashes along the far shoreline.
   vec3 H = normalize(uSunDir + V);
-  float spec = (pow(max(dot(N, H), 0.0), 220.0) * 3.2 + pow(max(dot(N, H), 0.0), 24.0) * 0.16) * (1.0 - 0.6 * uRain);
+  float spec = (pow(max(dot(N, H), 0.0), 320.0) * 1.5 + pow(max(dot(N, H), 0.0), 28.0) * 0.10) * (1.0 - 0.6 * uRain);
 
   // sky reflection with a small floor so the lake never loses its blue read,
   // even looking straight down (fresnel alone only kicks in at grazing angles)

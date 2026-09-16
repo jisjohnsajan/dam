@@ -44,6 +44,7 @@ export interface UIStats {
   floodedCells: number;
   qOut: number;
   inflow: number;
+  powerMW: number;
 }
 
 export type TabId = 'command' | 'twin' | 'sensors' | 'scenarios' | 'impact' | 'evac' | 'data';
@@ -257,6 +258,27 @@ export function GaugesPanel({
           </>
         )}
         {!g && <p className="text-[10px] text-slate-500">Waiting for solver…</p>}
+      </Panel>
+
+      <Panel title="Powerhouse generation" right={<Chip kind="forecast">SIMULATED</Chip>}>
+        {(() => {
+          const dam = DAMS[damId];
+          const demoMW = stats?.powerMW ?? 0;
+          const realMW = Math.round(demoMW * dam.qScale * (dam.heightM / 13));
+          const qOut = stats?.qOut ?? 0;
+          const curtailed = qOut > 60;
+          return (
+            <>
+              <Row k="Generation" v={curtailed ? 'intakes shut' : `${realMW.toLocaleString('en-IN')} MW`} accent={curtailed ? 'text-red-300' : 'text-amber-300'} />
+              <Row k="Turbine discharge" v={`${Math.round(Math.min(qOut * 0.42, 26) * dam.qScale).toLocaleString('en-IN')} m³/s`} />
+              <Row k="Units online" v={curtailed ? 'curtailed — flood release' : qOut > 30 ? '6 / 6 at rated head' : '2 / 6 online'} accent={curtailed ? 'text-red-300' : 'text-slate-300'} />
+              <p className="mt-1 text-[8.5px] leading-relaxed text-slate-500">
+                Turbine hall at the dam toe — output follows the live discharge × head.
+                Sensors S13/S14 (vibration, penstock flow) watch the units; S15 watches the tailrace.
+              </p>
+            </>
+          );
+        })()}
       </Panel>
 
       <Panel title="Alerts">
@@ -724,12 +746,22 @@ const PACKET_EXAMPLE = `POST /api/telemetry?dam=idukki
 {
   "node": "esp32-dam-01",
   "sensors": {
-    "level": 21.4,     // S1 JSN-SR04T ultrasonic (m)
+    "level": 21.4,     // S1 ultrasonic stage (m)
     "inflowV": 1.8,    // S2 Doppler probe (m/s)
     "pressure": 9.6,   // S3 transducer (mH2O)
-    "strain": 241.5,   // S4 strain gauge (microstrain)
+    "strain": 241.5,   // S4 strain gauge (µε)
     "tilt": 0.62,      // S5 tiltmeter (mrad)
-    "seepage": 5.1     // S6 piezometer (L/min)
+    "seepage": 5.1,    // S6 piezometer weir (L/min)
+    "upliftL": 3.4,    // S7 heel uplift (mH2O)
+    "upliftR": 3.5,    // S8 heel uplift (mH2O)
+    "strainB": 218.2,  // S9 strain array (µε)
+    "tiltB": 0.55,     // S10 tilt array (mrad)
+    "strainC": 222.7,  // S11 strain array (µε)
+    "gatePos": 0,      // S12 gate opening (%)
+    "turbVib": 1.4,    // S13 turbine vibration (mm/s)
+    "turbFlow": 11.2,  // S14 penstock flow (m³/s)
+    "tailLevel": 0.9,  // S15 tailrace stage (m)
+    "rain": 2.4        // S16 rainfall rate (mm/h)
   },
   "bat": 3.94, "rssi": -63
 }`;
@@ -780,7 +812,7 @@ export function SensorNetworkPanel({
         </p>
       </Panel>
 
-      <Panel title="Sensor channels · 6 deployed" right={<Chip kind="simulated">DEMO POSITIONS</Chip>}>
+      <Panel title={`Sensor channels · ${SENSORS.length} deployed`} right={<Chip kind="simulated">DEMO POSITIONS</Chip>}>
         <div className="flex flex-col gap-1.5">
           {SENSORS.map((s) => {
             const st = states[s.id] ?? 'ok';

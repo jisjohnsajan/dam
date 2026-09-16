@@ -31,6 +31,7 @@ const CAMS: { id: CamPreset; label: string }[] = [
   { id: 'dam', label: 'Dam face' },
   { id: 'reservoir', label: 'Reservoir' },
   { id: 'valley', label: 'Valley' },
+  { id: 'town', label: 'Town' },
   { id: 'top', label: 'Top' },
   { id: 'impact', label: 'Impact' },
 ];

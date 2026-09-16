@@ -83,7 +83,10 @@ export function bedAt(x: number, z: number): number {
     floor = 11.8 - t * 7.8; // downstream valley: 11.8 → 4.0
   }
   const wz = Math.abs(z);
-  const w0 = 30 + 5 * Math.sin(x * 0.045 + 1.3) + 3 * Math.sin(x * 0.013);
+  // the gorge pinches at the dam site and OPENS into a broad downstream
+  // valley — the floodplain where the river town stands (open-world floor)
+  const widen = x > DAM_X ? (x - DAM_X) * 0.34 : 0;
+  const w0 = 30 + 5 * Math.sin(x * 0.045 + 1.3) + 3 * Math.sin(x * 0.013) + widen;
 
   // incised main channel downstream of the dam (gaussian cut, ~2.2 m deep)
   if (x > DAM_X + 4) {
@@ -95,6 +98,17 @@ export function bedAt(x: number, z: number): number {
     const t = wz - w0;
     const rough = 0.75 + 0.5 * fbm(x * 0.08 + 3.7, z * 0.08, 3);
     floor += Math.min(t * 0.62, 24) * rough;
+  }
+
+  // Abutment shoulders — near the dam the valley walls rise just above the
+  // crest so the structure visibly keys into solid rock at both flanks.
+  // Without this the monoliths end mid-slope and the reservoir edge reads as
+  // a sliced-off sheet of water floating beside the dam ends.
+  const damDist = Math.abs(x - DAM_X);
+  if (damDist < 30 && wz > w0 - 6) {
+    const near = smoothstep(30, 8, damDist); // 1 at the dam axis, fades by ±30 m
+    const t = (wz - (w0 - 6)) / 13;
+    floor += near * Math.min(t, 0.9) * 9.0;
   }
 
   // mountain wall closing the upstream end — with a carved river gorge
@@ -275,16 +289,24 @@ export function terrainColor(
   const n2 = fbm(x * 0.06 + 1.7, z * 0.06 + 9.4, 2);
   const strata = Math.sin(b * 0.85 + n2 * 3.1) * 0.5 + 0.5; // rock banding
 
-  // base rock with subtle stratification
-  let r = 0.32 + 0.085 * n + 0.035 * strata;
-  let g = 0.29 + 0.07 * n + 0.03 * strata;
-  let bl = 0.255 + 0.055 * n + 0.022 * strata;
+  // base rock with subtle stratification (slightly warm granite/gneiss)
+  let r = 0.35 + 0.085 * n + 0.035 * strata;
+  let g = 0.31 + 0.07 * n + 0.03 * strata;
+  let bl = 0.262 + 0.055 * n + 0.022 * strata;
 
   // lush grass on gentle terrain (tropical valley floor + benches)
   const grass = smoothstep(0.38, 0.1, slope) * smoothstep(25, 17.5, b) * (0.5 + 0.5 * n2);
   r = r * (1 - grass) + (0.16 + 0.05 * n2) * grass;
   g = g * (1 - grass) + (0.30 + 0.08 * n2) * grass;
   bl = bl * (1 - grass) + (0.115 + 0.03 * n2) * grass;
+
+  // scrub vegetation clinging to the mid slopes — keeps the gorge walls from
+  // reading as bare gray concrete; the tropics never leave rock naked
+  const scrub = smoothstep(0.95, 0.35, slope) * smoothstep(42, 30, b) * (0.3 + 0.7 * n);
+  const sv = scrub * 0.6;
+  r = r * (1 - sv) + (0.23 + 0.04 * n2) * sv;
+  g = g * (1 - sv) + (0.29 + 0.05 * n2) * sv;
+  bl = bl * (1 - sv) + (0.16 + 0.03 * n2) * sv;
 
   // sandy channel bed
   const sand = smoothstep(0.6, 1.8, 1.8 - slope) * smoothstep(10.8, 9.2, b) * (x > DAM_X - 4 ? 1 : 0);
