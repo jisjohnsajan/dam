@@ -14,13 +14,17 @@ import {
 import type { GaugeStat, CamPreset } from '@/lib/dam/engine';
 import type { ImpactResult, EvacPlan, RiskResult, ForecastPoint } from '@/lib/damsafe/analysis';
 import {
+  SENSORS, CHANNEL_KEY, evaluateStates,
+  type SensorState, type TelemetryPacket,
+} from '@/lib/damsafe/sensors';
+import {
   DAMS, fmtRealTime, MECHANISM_LABEL, RAIN_FACTORS,
   simToRealLevel, storagePercent,
   type BreachLocation, type DamId, type FailureMechanism, type RainScenario,
 } from '@/lib/damsafe/config';
 import { Bar, Chip, KPI, LevelTag, Panel, Row, SectionTitle } from './ui';
 import {
-  AlertTriangle, CheckCircle2, Play, Pause, RotateCcw, Radio, Satellite, Database, Cpu,
+  AlertTriangle, CheckCircle2, Play, Pause, RotateCcw, Radio, Satellite, Database,
 } from 'lucide-react';
 
 export interface UIStats {
@@ -39,13 +43,15 @@ export interface UIStats {
   gauges: GaugeStat[];
   floodedCells: number;
   qOut: number;
+  inflow: number;
 }
 
-export type TabId = 'command' | 'twin' | 'scenarios' | 'impact' | 'evac' | 'data';
+export type TabId = 'command' | 'twin' | 'sensors' | 'scenarios' | 'impact' | 'evac' | 'data';
 
 export const TABS: { id: TabId; label: string }[] = [
   { id: 'command', label: 'Command Center' },
   { id: 'twin', label: 'Digital Twin' },
+  { id: 'sensors', label: 'Sensor Network' },
   { id: 'scenarios', label: 'Scenarios' },
   { id: 'impact', label: 'Flood Impact' },
   { id: 'evac', label: 'Evacuation' },
@@ -54,7 +60,7 @@ export const TABS: { id: TabId; label: string }[] = [
 
 // ============================================================ top bar
 export function TopBar({
-  damId, onDam, mode, onMode, tab, onTab,
+  damId, onDam, mode, onMode, tab, onTab, hardwareOnline,
 }: {
   damId: DamId;
   onDam: (d: DamId) => void;
@@ -62,6 +68,7 @@ export function TopBar({
   onMode: (m: 'live' | 'scenario') => void;
   tab: TabId;
   onTab: (t: TabId) => void;
+  hardwareOnline: boolean;
 }) {
   return (
     <div className="pointer-events-auto absolute left-2 right-2 top-2 z-30 rounded-lg border border-cyan-100/10 bg-[#0a1526]/92 shadow-2xl backdrop-blur-md">
@@ -99,7 +106,11 @@ export function TopBar({
           </label>
         </RadioGroup>
         <div className="ml-auto hidden items-center gap-2 md:flex">
-          <Chip kind="simulated">SIMULATED DATA</Chip>
+          {hardwareOnline ? (
+            <Chip kind="live">ESP32 LIVE FEED</Chip>
+          ) : (
+            <Chip kind="simulated">SIMULATED DATA</Chip>
+          )}
           <span className="flex items-center gap-1.5 text-[10px] text-emerald-300">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
             SYSTEM ONLINE
@@ -650,25 +661,237 @@ export function EvacPanel({
   );
 }
 
-// ============================================================ data & validation
-export function DataPanel({
-  damId, validation, iot, onIot,
+// ============================================================ sensor network (IoT)
+export interface TelemetryView {
+  source: 'hardware' | 'simulator';
+  hardwareOnline: boolean;
+  latest: TelemetryPacket | null;
+  packetCount: number;
+  nodes: { node: string; at: number; bat: number; rssi: number; packets: number }[];
+  lastAt: number;
+}
+
+function Sparkline({ data, tone }: { data: number[]; tone: 'ok' | 'warn' | 'alarm' }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = 244;
+    const h = 30;
+    if (c.width !== w * dpr) {
+      c.width = w * dpr;
+      c.height = h * dpr;
+    }
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h - 1);
+    ctx.lineTo(w, h - 1);
+    ctx.stroke();
+    if (data.length < 2) return;
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const span = Math.max(max - min, 1e-6);
+    const col = tone === 'alarm' ? '#ff5b5b' : tone === 'warn' ? '#fbbf24' : '#34d399';
+    // threshold band hint above the line
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = (i / (data.length - 1)) * (w - 2) + 1;
+      const y = h - 3 - ((data[i] - min) / span) * (h - 8);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    // endpoint dot
+    const lx = (w - 2);
+    const ly = h - 3 - ((data[data.length - 1] - min) / span) * (h - 8);
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(lx, ly, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }, [data, tone]);
+  return <canvas ref={ref} style={{ width: 244, height: 30 }} className="block" aria-hidden />;
+}
+
+const PACKET_EXAMPLE = `POST /api/telemetry?dam=idukki
+{
+  "node": "esp32-dam-01",
+  "sensors": {
+    "level": 21.4,     // S1 JSN-SR04T ultrasonic (m)
+    "inflowV": 1.8,    // S2 Doppler probe (m/s)
+    "pressure": 9.6,   // S3 transducer (mH2O)
+    "strain": 241.5,   // S4 strain gauge (microstrain)
+    "tilt": 0.62,      // S5 tiltmeter (mrad)
+    "seepage": 5.1     // S6 piezometer (L/min)
+  },
+  "bat": 3.94, "rssi": -63
+}`;
+
+export function SensorNetworkPanel({
+  telemetry, history, drivesTwin, onDrivesTwin, damId, onFocusSensor,
 }: {
+  telemetry: TelemetryView | null;
+  history: TelemetryPacket[];
+  drivesTwin: boolean;
+  onDrivesTwin: (b: boolean) => void;
   damId: DamId;
-  validation: { agreementPct: number; overlapKm2: number; missedKm2: number; falseKm2: number } | null;
-  iot: { connected: boolean; cm: number; log: string[] };
-  onIot: (on: boolean) => void;
+  onFocusSensor: (x: number, z: number) => void;
 }) {
   const dam = DAMS[damId];
+  const latest = telemetry?.latest ?? null;
+  const states = latest ? evaluateStates(latest) : ({} as Record<string, SensorState>);
+  const ageS = latest ? Math.max(0, Math.round((Date.now() - latest.at) / 1000)) : null;
+  const live = telemetry?.source === 'hardware';
+
   return (
     <div className="flex flex-col gap-2">
-      <Panel title="Data freshness" right={<Chip kind="simulated">DEMO DATASET</Chip>}>
+      <Panel
+        title="ESP32 node link"
+        right={<Chip kind={live ? 'live' : 'simulated'}>{live ? 'HARDWARE LIVE' : 'EMBEDDED SIMULATOR'}</Chip>}
+      >
+        <Row k="Node" v={latest?.node ?? '—'} accent={live ? 'text-emerald-300' : 'text-amber-300'} />
+        <Row k="Last packet" v={ageS === null ? '—' : `${ageS}s ago`} accent={ageS !== null && ageS > 4 ? 'text-amber-300' : 'text-emerald-300'} />
+        <Row k="Packets" v={telemetry ? telemetry.packetCount.toLocaleString('en-IN') : '0'} accent="text-cyan-300" />
+        <Row k="Wi-Fi RSSI" v={latest ? `${latest.rssi} dBm` : '—'} accent="text-slate-300" />
+        <Row k="Supply" v={latest ? `${latest.bat.toFixed(2)} V` : '—'} accent={latest && latest.bat < 3.5 ? 'text-amber-300' : 'text-slate-300'} />
+        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+          The simulator mirrors the twin 1:1 until a physical ESP32 POSTs to /api/telemetry —
+          hardware then owns the feed automatically and yields back after 12 s of silence.
+        </p>
+      </Panel>
+
+      <Panel title="Telemetry-driven twin" right={<Chip kind="forecast">DATA-DRIVEN</Chip>}>
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-slate-300">Hardware stage (S1) drives reservoir level</span>
+          <Switch checked={drivesTwin} onCheckedChange={onDrivesTwin} aria-label="Telemetry drives twin" />
+        </div>
+        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+          When on, HARDWARE stage readings (S1) steer the 3D solver&apos;s reservoir drive in live
+          mode — the twin follows measured data instead of the manual slider. Structural channels
+          (S4–S6) feed the risk engine at all times. Simulator packets never steer the twin
+          (they mirror it, so steering would be a feedback loop).
+        </p>
+      </Panel>
+
+      <Panel title="Sensor channels · 6 deployed" right={<Chip kind="simulated">DEMO POSITIONS</Chip>}>
+        <div className="flex flex-col gap-1.5">
+          {SENSORS.map((s) => {
+            const st = states[s.id] ?? 'ok';
+            const key = CHANNEL_KEY[s.id];
+            const val = latest ? latest.sensors[key] : undefined;
+            const series = history
+              .map((p) => p.sensors[key])
+              .filter((v): v is number => typeof v === 'number')
+              .slice(-64);
+            const tone = st === 'alarm' ? 'red' : st === 'warn' ? 'amber' : 'cyan';
+            return (
+              <div key={s.id} className="rounded border border-white/5 bg-white/[0.02] p-2">
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-[10.5px] font-semibold text-slate-200">
+                    <button
+                      onClick={() => onFocusSensor(s.x, s.z)}
+                      className="rounded bg-white/10 px-1 py-[1px] font-mono text-[9px] text-cyan-200 hover:bg-cyan-500/25"
+                      aria-label={`Focus 3D camera on sensor ${s.id}`}
+                    >
+                      {s.id}
+                    </button>
+                    {s.name}
+                  </span>
+                  <span
+                    className={`rounded px-1.5 py-[1px] text-[8px] font-bold tracking-[0.1em] ${
+                      st === 'alarm'
+                        ? 'animate-pulse bg-red-900/70 text-red-300'
+                        : st === 'warn'
+                          ? 'bg-amber-900/60 text-amber-300'
+                          : 'bg-emerald-900/40 text-emerald-300'
+                    }`}
+                  >
+                    {st.toUpperCase()}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-end justify-between">
+                  <p className="font-mono text-[14px] font-semibold leading-none tabular-nums text-cyan-200">
+                    {val !== undefined ? val.toFixed(1) : '—'}
+                    <span className="ml-1 text-[9px] font-normal text-slate-400">{s.unit}</span>
+                  </p>
+                  <p className="text-[8.5px] text-slate-500">{s.hardware}</p>
+                </div>
+                <div className="mt-1">
+                  <Sparkline data={series} tone={st} />
+                </div>
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <Bar frac={val !== undefined ? val / (s.alarm * 1.15) : 0} tone={tone as 'cyan' | 'amber' | 'red'} />
+                  <span className="shrink-0 font-mono text-[8px] text-slate-500">
+                    W {s.warn} / A {s.alarm}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Packet format · wire your ESP32" right={<Chip kind="live">PHASE 1</Chip>}>
+        <pre className="max-h-44 overflow-auto rounded bg-black/45 p-2 font-mono text-[8.5px] leading-relaxed text-emerald-200/85 damsafe-scroll">
+{PACKET_EXAMPLE}
+        </pre>
+        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+          Any JSON with at least one recognised channel is accepted; partial packets are merged
+          with the previous values, so a partially wired rig streams only the channels it has.
+          Swap HTTPClient for an MQTT bridge in production — the twin consumes the same schema.
+        </p>
+      </Panel>
+
+      <Panel title="Node registry · cascade-ready" right={<Chip kind="forecast">PHASE 2</Chip>}>
+        {telemetry && telemetry.nodes.length > 0 ? (
+          telemetry.nodes.slice(0, 4).map((n) => (
+            <Row
+              key={n.node}
+              k={n.node}
+              v={`${n.packets} pk · ${n.rssi} dBm · ${n.bat.toFixed(2)} V`}
+              accent="text-emerald-300"
+            />
+          ))
+        ) : (
+          <Row k="esp32-dam-01" v="awaiting first hardware packet" accent="text-slate-400" />
+        )}
+        <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
+          Every reporting node registers under its dam namespace ({dam.id}). Phase 2 adds
+          upstream cascade dams as additional namespaces — the ingestion store, SSE topics and
+          3D marker layer are already keyed per dam.
+        </p>
+      </Panel>
+    </div>
+  );
+}
+
+// ============================================================ data & validation
+export function DataPanel({
+  validation, telemetry,
+}: {
+  validation: { agreementPct: number; overlapKm2: number; missedKm2: number; falseKm2: number } | null;
+  telemetry: TelemetryView | null;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Panel title="Data freshness" right={<Chip kind={telemetry?.source === 'hardware' ? 'live' : 'simulated'}>{telemetry?.source === 'hardware' ? 'HARDWARE FEED' : 'DEMO DATASET'}</Chip>}>
         <Row k="Buildings (OSM + survey)" v="updated 12 days ago" accent="text-slate-300" />
         <Row k="Roads" v="updated 5 days ago" accent="text-slate-300" />
         <Row k="Land cover" v="updated 23 days ago" accent="text-slate-300" />
         <Row k="Satellite scene" v="updated 2 days ago" accent="text-slate-300" />
         <Row k="DEM" v="reference dataset" accent="text-slate-300" />
-        <Row k="Sensor feed" v={iot.connected ? 'ESP32 demo connected' : 'simulated feed'} accent={iot.connected ? 'text-emerald-300' : 'text-slate-300'} />
+        <Row
+          k="Sensor feed"
+          v={telemetry?.source === 'hardware' ? `ESP32 ${telemetry.latest?.node ?? ''}` : 'embedded simulator'}
+          accent={telemetry?.source === 'hardware' ? 'text-emerald-300' : 'text-slate-300'}
+        />
       </Panel>
 
       <Panel title="Predicted vs observed flood" right={<Chip kind="forecast">MODEL CHECK</Chip>}>
@@ -688,25 +911,19 @@ export function DataPanel({
         </p>
       </Panel>
 
-      <Panel title="ESP32 hardware prototype" right={<Chip kind="simulated">MQTT · DEMO</Chip>}>
-        <div className="mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-1.5 text-[11px] text-slate-300">
-            <Cpu className="h-3.5 w-3.5 text-cyan-400" /> Miniature dam sensor
-          </span>
-          <Switch checked={iot.connected} onCheckedChange={onIot} aria-label="Connect ESP32 demo" />
-        </div>
-        {iot.connected && (
-          <>
-            <Row k="Physical water level" v={`${iot.cm.toFixed(1)} cm`} accent="text-emerald-300" />
-            <Row k="Digital twin equivalent" v={`${simToRealLevel(dam, 15.2 + (iot.cm / 30) * 7.5).toFixed(1)} m`} />
-            <div className="mt-1.5 max-h-24 overflow-y-auto rounded bg-black/40 p-1.5 font-mono text-[8.5px] leading-relaxed text-emerald-200/80">
-              {iot.log.slice(-6).map((l, i) => <p key={i}>{l}</p>)}
-            </div>
-          </>
-        )}
+      <Panel title="ESP32 telemetry pipeline" right={<Chip kind={telemetry?.source === 'hardware' ? 'live' : 'simulated'}>{telemetry?.source === 'hardware' ? 'HARDWARE' : 'SIMULATOR'}</Chip>}>
+        <Row k="Transport" v="HTTP POST · 1 Hz · SSE push" accent="text-slate-300" />
+        <Row
+          k="Source"
+          v={telemetry?.source === 'hardware' ? 'Physical ESP32 node' : 'Embedded twin simulator'}
+          accent={telemetry?.source === 'hardware' ? 'text-emerald-300' : 'text-amber-300'}
+        />
+        <Row k="Channels" v="6 · level / inflow / pressure / strain / tilt / seepage" accent="text-slate-300" />
+        <Row k="Packets received" v={telemetry ? telemetry.packetCount.toLocaleString('en-IN') : '0'} accent="text-cyan-300" />
         <p className="mt-1.5 text-[8.5px] leading-relaxed text-slate-500">
-          Physical-digital sync demo: ultrasonic sensor → ESP32 → Wi-Fi MQTT → twin. Low-voltage
-          demonstration hardware, not a real dam monitoring device.
+          A real ESP32 node takes over this pipeline the moment it POSTs to /api/telemetry —
+          the simulator automatically yields for as long as hardware packets keep arriving.
+          Full packet format and per-channel live values are in the SENSOR NETWORK tab.
         </p>
       </Panel>
 

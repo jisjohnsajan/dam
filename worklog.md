@@ -337,3 +337,93 @@ Stage Summary:
   -> breach -> flood wave. Structural/piping runs now fire the failure effects.
 - Key files touched: src/lib/dam/terrain.ts, src/lib/dam/props.ts, src/lib/dam/engine.ts.
 - Verification screenshots: tool-results/fix2_*.png.
+
+---
+Task ID: iot-esp32-integration
+Agent: Super Z (main agent)
+Task: IoT-Integrated Dam Simulation & Flood Monitoring System (master prompt) — ESP32
+telemetry pipeline (Phase 1 hardware handshake), 6-sensor network mapped into the 3D
+twin with blinking threshold alerts, interactive zoom/pan situation map, data-driven
+simulation, and Phase-2 multi-dam scaffolding.
+
+Work Log:
+- sensors.ts (NEW): 6-sensor network contract — S1 reservoir stage (JSN-SR04T
+  ultrasonic), S2 inflow velocity (Doppler), S3 dam-face pressure (transducer),
+  S4 wall strain (vibrating-wire), S5 crest tilt (MEMS), S6 foundation seepage
+  (piezometer); demo-world positions, warn/alarm thresholds, TelemetryPacket JSON
+  schema, parsePacket validator (partial packets OK), evaluateStates, and an
+  embedded simulator that synthesises physically-consistent values FROM the twin's
+  solver state (level, inflow surge, depth-squared strain, breach-squared tilt,
+  breach-boosted seepage + measurement noise).
+- telemetry.ts (NEW): globalThis singleton ingestion store — per-dam channels
+  (latest + 180-packet ring + node registry + twin state), hardware/simulator
+  source state machine (hardware owns the channel while packets arrive; simulator
+  takes over after 12 s silence), 1 Hz heartbeat loop (unref'd, HMR-safe), SSE
+  subscriber registry, multi-dam namespaces (Phase 2 cascade-ready).
+- API routes (NEW): POST/GET/OPTIONS /api/telemetry (ESP32 ingest with open CORS +
+  ack with intervalMs; snapshot poll), POST /api/telemetry/state (browser twin
+  pushes solver state every 2 s so the simulator mirrors it), GET
+  /api/telemetry/stream (SSE: snapshot + ~1 Hz packet frames + 15 s pings).
+- engine.ts: setSensors() 3D marker layer — floating buoys (reservoir sensors,
+  re-floated every frame on the real solver surface via downsample lookup),
+  pedestal nodes on dam wall/bedding (placed on structBase), canvas ID sprites,
+  state beacons (ok emerald / warn amber pulsing / alarm red strobing + scaling),
+  expanding alert rings on warn/alarm; updateSensors() in the tick loop;
+  DamStats.inflow added; disposeSensorObject helper.
+- minimap.tsx (NEW): interactive canvas situation map in the right column — static
+  terrain layer rendered once from bedAt/terrainColor (client-only build to avoid
+  SSR document access — fixed a "document is not defined" dev-overlay error),
+  live water overlay from the solver downsample, dam/villages/gauges/inflow-arrow/
+  sensor overlays with blinking alarm halos, real-km scale bar, wheel zoom around
+  cursor + drag pan + +/−/reset buttons + dblclick reset, click sensor/village →
+  focusOn 3D camera; ~10 Hz redraw.
+- panels.tsx: new SENSOR NETWORK tab — ESP32 node link (source chip, node id,
+  packet age, RSSI, supply), telemetry-driven twin toggle, 6 sensor cards (live
+  value, hardware label, sparkline canvas, threshold bar W/A, OK/WARN/ALARM
+  badges), ESP32 packet format docs, cascade-ready node registry; DataPanel now
+  consumes real TelemetryView (fake MQTT demo removed); TopBar chip flips to
+  ESP32 LIVE FEED when hardware owns the feed; UIStats.inflow.
+- analysis.ts: computeRisk gained optional structural factor — strain/tilt/seepage
+  normalised against alarm thresholds → NORMAL/ELEVATED/HIGH/EXTREME with WHY note.
+- page.tsx: fake IoT demo removed; real SSE subscription (per-dam EventSource,
+  snapshot+packet handlers, node registry upsert), twin-state POST loop (2 s),
+  hardware stage steering (drivesTwin gate — hardware packets only, never
+  simulator, never during scenarios; prevents feedback loop), sensorDefs memo →
+  engine.setSensors, Minimap + GaugesPanel right column restructure, computeRisk
+  structural wiring, engine re-create now restores current liveFrac (Fast-Refresh
+  hardening).
+- Verified end-to-end (agent-browser + curl):
+  * curl POST hardware packet → 200 ack, snapshot shows source=hardware, node
+    registered; partial packet {level} merges over previous channels; after 12 s
+    silence source flips to simulator automatically; SSE emits snapshot + 1 Hz
+    packets (both observed on the wire).
+  * UI flips to ESP32 LIVE FEED + HARDWARE LIVE chips; S1 shows hardware value;
+    S2 WARN at 2.9 m/s; alarm values (strain 465/tilt 2.72/seepage 32) → red
+    blinking markers on map + alarm beacons/rings in 3D.
+  * drivesTwin: hardware level 17.0/17.2/17.4 → engine drive target + liveFrac
+    follow exactly (0.24/0.2667/0.293 observed); level pinned at 17.40 for a full
+    30 s sustained stream (tagged engine, no remount, no drift).
+  * Risk card: "Structural indicators EXTREME — channel at/over ALARM threshold"
+    from hardware values alone.
+  * Dam break regression: scenario runs with IoT layer live (PREPARING → BREACH
+    FORMING % banner, SIMULATED SCENARIO gauge chip, timeline snapshots).
+  * Minimap zoom ×2.1 (village + sensor labels appear), mobile 390px layout ok.
+  * tsc clean (src), eslint clean, dev.log 200s only, no page errors.
+
+Stage Summary:
+- Deliverable: DAMSAFE 3D now runs a complete Phase-1 IoT pipeline: ESP32 nodes
+  POST JSON to /api/telemetry → store → SSE → twin (3D markers, sensor tab, map,
+  risk engine, optional level steering). Without hardware, an embedded simulator
+  mirrors the solver into the same pipeline so every consumer is exercised
+  end-to-end (honestly labelled SIMULATED vs HARDWARE in the UI).
+- Key files: src/lib/damsafe/{sensors,telemetry}.ts, src/app/api/telemetry/*
+  (route, state, stream), src/lib/dam/engine.ts (sensor markers + inflow stat),
+  src/components/damsafe/{minimap,panels}.tsx, src/app/page.tsx,
+  src/lib/damsafe/analysis.ts (structural risk factor).
+- Phase 2 readiness: per-dam namespaces + node registry + SSE topic filtering
+  already in place; cascade dams plug in as additional dam ids without schema
+  changes.
+- Known sandbox artifact: headless rAF throttling slows the solver and canvas
+  refresh during automated tests (sim ~0.1 s per wall-s); real browsers run at
+  full speed. A leaked Fast-Refresh context can double-post twin state during
+  live HMR editing in dev — harmless to solver integrity, disappears on reload.

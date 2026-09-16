@@ -4,12 +4,13 @@
    is registered once and must read current React state without re-registering. */
 /* eslint-disable react-hooks/immutability */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { DamSim, type CamPreset, type DamStats, type LayerMode, type ScenarioParams } from '@/lib/dam/engine';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DamSim, type CamPreset, type DamStats, type LayerMode, type ScenarioParams, type SensorMarkerDef } from '@/lib/dam/engine';
 import {
   TopBar, CommandCenter, ScenarioPanel, ImpactPanel, EvacPanel, DataPanel, TwinPanel,
-  GaugesPanel, TimelineBar, TABS, type ScenarioForm, type TabId, type UIStats,
+  GaugesPanel, TimelineBar, TABS, SensorNetworkPanel, type ScenarioForm, type TabId, type UIStats, type TelemetryView,
 } from '@/components/damsafe/panels';
+import { Minimap } from '@/components/damsafe/minimap';
 import { Panel, GradientLegend } from '@/components/damsafe/ui';
 import { AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal, Zap, Waves, Droplets, DoorOpen, CloudRain, RotateCcw } from 'lucide-react';
 import {
@@ -17,7 +18,11 @@ import {
   type EvacPlan, type ImpactResult, type RiskResult, type ForecastPoint,
 } from '@/lib/damsafe/analysis';
 import {
-  DAMS, SCENARIO_DEFAULTS, fmtRealTime,
+  SENSORS, evaluateStates,
+  type SensorState, type TelemetryPacket,
+} from '@/lib/damsafe/sensors';
+import {
+  DAMS, SCENARIO_DEFAULTS, fmtRealTime, simLevelToFrac,
   type DamId,
 } from '@/lib/damsafe/config';
 
@@ -76,7 +81,17 @@ export default function Page() {
   const [validation, setValidation] = useState<ReturnType<typeof computeValidation> | null>(null);
   const [scrubIdx, setScrubIdx] = useState<number | null>(null);
   const [snapInfo, setSnapInfo] = useState<{ count: number; times: number[] }>({ count: 0, times: [] });
-  const [iot, setIot] = useState<{ connected: boolean; cm: number; log: string[] }>({ connected: false, cm: 0, log: [] });
+
+  // ---- IoT telemetry (ESP32 hardware ⇄ embedded simulator)
+  const [telemetry, setTelemetry] = useState<TelemetryView | null>(null);
+  const [telemetryHistory, setTelemetryHistory] = useState<TelemetryPacket[]>([]);
+  // SSR-safe default: the twin never steers itself from simulated packets;
+  // hardware stage readings take over only when the user enables it.
+  const [drivesTwin, setDrivesTwin] = useState(false);
+  const structRef = useRef<{ strain: number; tilt: number; seepage: number } | undefined>(undefined);
+  const scenActiveRef = useRef(false);
+  const statsRef = useRef<UIStats | null>(null);
+
   // SSR-safe defaults (false) — real viewport-based values are applied after
   // mount in an effect, otherwise the server HTML mismatches (hydration error).
   const [showLeft, setShowLeft] = useState(false);
@@ -99,6 +114,8 @@ export default function Page() {
         eng.onStats = (s: DamStats) => {
           setReady(true);
           setStats(s);
+          scenActiveRef.current = s.scenarioActive;
+          statsRef.current = s;
           for (let gi = 0; gi < 4; gi++) {
             const h = hydroRef.current[gi];
             const g = s.gauges[gi];
@@ -116,13 +133,17 @@ export default function Page() {
               setImpact(imp);
               setEvacPlans(computeEvac(prof, imp).plans);
               setValidation(computeValidation(down));
-              setRisk(computeRisk(prof, liveFracRef.current, s.levelFrac, s.riseMPerHr, 8 * prof.qScale, 0));
+              setRisk(computeRisk(prof, liveFracRef.current, s.levelFrac, s.riseMPerHr, 8 * prof.qScale, 0, structRef.current));
               setForecast(computeForecast(prof, liveFracRef.current, s.riseMPerHr, 0));
             }
           }
         };
         eng.onError = (m) => setError(m);
         engineRef.current = eng;
+        // keep a freshly (re)created engine consistent with current React state
+        // (Fast Refresh / StrictMode remounts must not snap the lake back to
+        // the default level while hardware telemetry is steering it)
+        eng.setLiveLevel(liveFracRef.current);
         setTimeout(() => setReady(true), 800);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -264,26 +285,150 @@ export default function Page() {
     else eng.clearEvacRoute();
   }, []);
 
-  // ---- IoT ESP32 demo
-  useEffect(() => {
-    if (!iot.connected) return;
-    const iv = setInterval(() => {
-      setIot((p) => {
-        const cm = Math.min(30, p.cm + 0.45 + Math.random() * 0.3);
-        const frac = 0.05 + 0.95 * (cm / 30);
-        engineRef.current?.setLiveLevel(Math.min(frac, 1));
-        setLiveFrac(Math.min(frac, 1));
-        const log = [...p.log, `[MQTT] dam/${damId}/waterlevel ← ${(cm).toFixed(1)} cm`];
-        return { ...p, cm, log: log.slice(-24) };
-      });
-    }, 1000);
-    return () => clearInterval(iv);
-  }, [iot.connected, damId]);
+  // ---- IoT telemetry: SSE live stream (ESP32 hardware or embedded simulator)
+  const drivesTwinRef = useRef(drivesTwin);
+  drivesTwinRef.current = drivesTwin;
 
-  const onIot = useCallback((on: boolean) => {
-    setIot((p) => ({ connected: on, cm: on ? 4 : 0, log: on ? ['[SYS] ESP32 demo connected · topic dam/#'] : [] }));
-    if (!on) onLevel(0.84);
-  }, [onLevel]);
+  useEffect(() => {
+    const es = new EventSource(`/api/telemetry/stream?dam=${damId}`);
+    const onSnapshot = (e: MessageEvent) => {
+      try {
+        const d = JSON.parse(e.data) as {
+          source: 'hardware' | 'simulator';
+          hardwareOnline: boolean;
+          latest: TelemetryPacket | null;
+          packets: number;
+          nodes: TelemetryView['nodes'];
+        };
+        setTelemetry({
+          source: d.source,
+          hardwareOnline: d.hardwareOnline,
+          latest: d.latest,
+          packetCount: d.packets ?? 0,
+          nodes: d.nodes ?? [],
+          lastAt: d.latest?.at ?? 0,
+        });
+        if (d.latest) {
+          setTelemetryHistory([d.latest]);
+          if (d.latest.sensors.strain !== undefined) {
+            structRef.current = {
+              strain: d.latest.sensors.strain,
+              tilt: d.latest.sensors.tilt ?? 0.5,
+              seepage: d.latest.sensors.seepage ?? 4,
+            };
+          }
+        }
+      } catch {
+        /* malformed frame — next packet supersedes */
+      }
+    };
+    const onPacket = (e: MessageEvent) => {
+      try {
+        const p = JSON.parse(e.data) as TelemetryPacket;
+        setTelemetry((prev) => {
+          const nodes = prev ? [...prev.nodes] : [];
+          if (p.source === 'hardware') {
+            const i = nodes.findIndex((n) => n.node === p.node);
+            const entry = {
+              node: p.node, at: p.at, bat: p.bat, rssi: p.rssi,
+              packets: (i >= 0 ? nodes[i].packets : 0) + 1,
+            };
+            if (i >= 0) nodes[i] = entry;
+            else nodes.push(entry);
+          }
+          return {
+            source: p.source,
+            hardwareOnline: p.source === 'hardware',
+            latest: p,
+            packetCount: (prev?.packetCount ?? 0) + 1,
+            nodes,
+            lastAt: p.at,
+          };
+        });
+        setTelemetryHistory((h) => [...h.slice(-89), p]);
+        if (p.sensors.strain !== undefined) {
+          structRef.current = {
+            strain: p.sensors.strain,
+            tilt: p.sensors.tilt ?? 0.5,
+            seepage: p.sensors.seepage ?? 4,
+          };
+        }
+        // data-driven twin: hardware stage readings steer the reservoir in live mode
+        if (drivesTwinRef.current && p.source === 'hardware' && !scenActiveRef.current) {
+          const lv = p.sensors.level;
+          if (lv !== undefined) {
+            const frac = Math.min(simLevelToFrac(lv), 1);
+            engineRef.current?.setLiveLevel(frac);
+            setLiveFrac(frac);
+          }
+        }
+      } catch {
+        /* malformed frame — next packet supersedes */
+      }
+    };
+    es.addEventListener('snapshot', onSnapshot as EventListener);
+    es.addEventListener('packet', onPacket as EventListener);
+    return () => {
+      es.removeEventListener('snapshot', onSnapshot as EventListener);
+      es.removeEventListener('packet', onPacket as EventListener);
+      es.close();
+    };
+  }, [damId]);
+
+  // ---- push twin solver state to the ingestion service (simulator mirrors it)
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const s = statsRef.current;
+      if (!s) return;
+      fetch('/api/telemetry/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dam: damId,
+          levelFrac: s.levelFrac,
+          level: s.level,
+          inflow: s.inflow,
+          qOut: s.qOut,
+          breach01: s.breach01,
+          vmax: s.vmax,
+        }),
+        keepalive: true,
+      }).catch(() => {
+        /* telemetry link loss is non-fatal for the twin */
+      });
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [damId]);
+
+  // ---- map sensor states onto the 3D marker layer
+  const sensorDefs = useMemo<SensorMarkerDef[]>(() => {
+    const states = telemetry?.latest
+      ? evaluateStates(telemetry.latest)
+      : ({} as Record<string, SensorState>);
+    return SENSORS.map((s) => ({
+      id: s.id,
+      x: s.x,
+      z: s.z,
+      kind: s.kind,
+      state: states[s.id] ?? 'ok',
+      label: s.name,
+    }));
+  }, [telemetry?.latest]);
+
+  useEffect(() => {
+    engineRef.current?.setSensors(sensorDefs);
+  }, [sensorDefs]);
+
+  const getFlow = useCallback(() => {
+    const e = engineRef.current;
+    if (!e) return null;
+    const d = e.getDownsample();
+    return { data: d.data, w: d.w, h: d.h };
+  }, []);
+
+  const onFocusCam = useCallback((x: number, z: number) => {
+    engineRef.current?.focusOn(x, z, 30);
+  }, []);
 
   const dam = DAMS[damId];
 
@@ -313,7 +458,7 @@ export default function Page() {
 
       {/* top bar */}
       {!cinematic && (
-        <TopBar damId={damId} onDam={onDam} mode={mode} onMode={setMode} tab={tab} onTab={setTab} />
+        <TopBar damId={damId} onDam={onDam} mode={mode} onMode={setMode} tab={tab} onTab={setTab} hardwareOnline={telemetry?.source === 'hardware'} />
       )}
 
       {/* scrub badge */}
@@ -345,6 +490,16 @@ export default function Page() {
                 fps={stats?.fps ?? 0}
               />
             )}
+            {tab === 'sensors' && (
+              <SensorNetworkPanel
+                telemetry={telemetry}
+                history={telemetryHistory}
+                drivesTwin={drivesTwin}
+                onDrivesTwin={setDrivesTwin}
+                damId={damId}
+                onFocusSensor={onFocusCam}
+              />
+            )}
             {tab === 'scenarios' && (
               <ScenarioPanel form={form} onChange={(p) => setForm((f) => ({ ...f, ...p }))} onRun={onRun} onReset={onReset} running={running} stats={stats} damId={damId} />
             )}
@@ -354,9 +509,7 @@ export default function Page() {
             {tab === 'evac' && (
               <EvacPanel plans={evacPlans} shelters={dam.shelters.map((s) => ({ name: s.name, capacity: s.capacity, risk: 'LOW' }))} onRoute={onRoute} impact={impact} />
             )}
-            {tab === 'data' && (
-              <DataPanel damId={damId} validation={validation} iot={iot} onIot={onIot} />
-            )}
+            {tab === 'data' && <DataPanel validation={validation} telemetry={telemetry} />}
           </div>
         </div>
       )}
@@ -372,11 +525,12 @@ export default function Page() {
         </button>
       )}
 
-      {/* right gauges */}
+      {/* right column: situation map + gauge network */}
       {!cinematic && (
         <>
-          <div className={`absolute right-2 top-[112px] z-20 w-[280px] max-w-[calc(100vw-1rem)] transition-transform duration-300 ${showRight ? 'translate-x-0' : 'translate-x-[110%]'}`}>
-            <div className="max-h-[calc(100vh-190px)] overflow-y-auto pr-0.5 damsafe-scroll">
+          <div className={`absolute right-2 top-[112px] z-20 flex w-[280px] max-w-[calc(100vw-1rem)] flex-col gap-2 transition-transform duration-300 ${showRight ? 'translate-x-0' : 'translate-x-[110%]'}`}>
+            <Minimap damId={damId} sensors={sensorDefs} getFlow={getFlow} onFocus={onFocusCam} />
+            <div className="min-h-0 overflow-y-auto pr-0.5 damsafe-scroll" style={{ maxHeight: 'calc(100vh - 402px)' }}>
               <GaugesPanel stats={stats} hydro={hydro} gaugeIdx={gaugeIdx} onGauge={setGaugeIdx} risk={risk} damId={damId} />
             </div>
           </div>

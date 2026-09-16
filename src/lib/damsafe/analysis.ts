@@ -32,6 +32,7 @@ export function computeRisk(
   riseMPerHr: number, // real metres/hour
   inflowReal: number,
   rainInflow: number,
+  structural?: { strain: number; tilt: number; seepage: number }, // ESP32 channels
 ): RiskResult {
   const factors: RiskFactor[] = [];
   const add = (
@@ -67,8 +68,27 @@ export function computeRisk(
   // spillway (assumed operational in the prototype)
   add('spillway', 'Spillway condition', 'NORMAL', 15, 0.08 * 15, 'Gates operational within assumed limits');
 
-  // structural indicators (no sensors connected in the prototype)
-  add('struct', 'Structural indicators', 'NORMAL', 10, 0.05 * 10, 'No sensor-verified warnings (prototype)');
+  // structural indicators — live ESP32 channels (strain / tilt / seepage) when
+  // telemetry is flowing, otherwise the assumed-healthy prototype baseline.
+  let slvl: RiskFactor['level'] = 'NORMAL';
+  let sScore = 0.05 * 10;
+  let sNote = 'No sensor-verified warnings (prototype)';
+  if (structural) {
+    const strainN = structural.strain / 430; // alarm threshold at S4
+    const tiltN = structural.tilt / 2.2;
+    const seepN = structural.seepage / 26;
+    const worst = Math.max(strainN, tiltN, seepN);
+    slvl = worst >= 0.95 ? 'EXTREME' : worst >= 0.74 ? 'HIGH' : worst >= 0.52 ? 'ELEVATED' : 'NORMAL';
+    sScore = Math.min(worst, 1) * 10;
+    sNote = worst >= 0.95
+      ? 'Structural channel at/over ALARM threshold'
+      : worst >= 0.74
+        ? 'Structural channel beyond WARN threshold'
+        : worst >= 0.52
+          ? 'Structural loading above mid-band'
+          : 'Strain / tilt / seepage within design band';
+  }
+  add('struct', 'Structural indicators', slvl, 10, sScore, sNote);
 
   const score = Math.round(factors.reduce((s, f) => s + f.score, 0));
   const status: RiskResult['status'] = score >= 75 ? 'EXTREME' : score >= 50 ? 'HIGH' : score >= 25 ? 'MODERATE' : 'LOW';

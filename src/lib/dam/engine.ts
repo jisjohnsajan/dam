@@ -73,6 +73,7 @@ export interface DamStats {
   gauges: GaugeStat[];
   floodedCells: number;
   qOut: number; // demo m³/s through breach+gates (G1)
+  inflow: number; // demo m³/s entering the reservoir (base + rain)
 }
 
 const DT_MAX = 0.008;
@@ -93,6 +94,72 @@ interface Floater {
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   home: THREE.Vector3;
+}
+
+export type SensorMarkerState = 'ok' | 'warn' | 'alarm';
+
+export interface SensorMarkerDef {
+  id: string;
+  x: number; // demo-world metres
+  z: number;
+  kind: 'reservoir' | 'structure';
+  state: SensorMarkerState;
+  label: string;
+}
+
+interface SensorMarker {
+  id: string;
+  kind: 'reservoir' | 'structure';
+  state: SensorMarkerState;
+  group: THREE.Group;
+  beacon: THREE.Mesh;
+  beaconMat: THREE.MeshStandardMaterial;
+  ring: THREE.Mesh | null;
+  ringMat: THREE.MeshBasicMaterial | null;
+  label: THREE.Sprite;
+  phase: number;
+  y: number; // rest elevation (structure top) — buoys re-float every frame
+}
+
+const SENSOR_STATE_COLOR: Record<SensorMarkerState, number> = {
+  ok: 0x34d399,
+  warn: 0xfbbf24,
+  alarm: 0xff4444,
+};
+
+/** Canvas-sprite ID chip floating above each 3D sensor marker. */
+function makeSensorLabel(id: string): THREE.Sprite {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 56;
+  const ctx = cv.getContext('2d')!;
+  ctx.fillStyle = 'rgba(6,12,24,0.85)';
+  ctx.beginPath();
+  ctx.roundRect(6, 8, 116, 40, 9);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#e2f3ff';
+  ctx.font = 'bold 26px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(id, 64, 29);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sprite.scale.set(2.5, 1.1, 1);
+  return sprite;
+}
+
+function disposeSensorObject(root: THREE.Object3D): void {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
+    else if (mat) mat.dispose();
+  });
 }
 
 export class DamSim {
@@ -146,6 +213,9 @@ export class DamSim {
   private barrels: Barrel[] = [];
   private chunks: Chunk[] = [];
   private floaters: Floater[] = [];
+  private sensorRoot: THREE.Group | null = null;
+  private sensorMarkers = new Map<string, SensorMarker>();
+  private sensorClock = 0;
   private evacLine: THREE.Line | null = null;
   private audio = new RiverAudio();
   private sunDir = new THREE.Vector3(-0.42, 0.62, 0.28).normalize();
@@ -988,6 +1058,7 @@ export class DamSim {
 
     this.updateCamera(dtReal);
     this.updateWeather(dtReal);
+    this.updateSensors(dtReal);
     this.waterMat.uniforms.uState.value = this.curState.texture;
     this.waterMat.uniforms.uFoam.value = this.curFoam.texture;
     this.waterMat.uniforms.uTime.value = this.simTime;
@@ -1263,7 +1334,166 @@ export class DamSim {
     this.dam.stainBand.position.y = this.lastLevel - 0.6;
   }
 
-  // ================================================================ stats
+  // ============================================================ IoT sensor markers
+  // 3D representation of the ESP32 sensor network: floating buoys for reservoir
+  // sensors, pedestal nodes on the dam wall/bedding, ID sprites, and beacons +
+  // expanding alert rings that blink when a channel crosses warn/alarm.
+
+  /** Sync the sensor-marker layer with the current telemetry snapshot. */
+  setSensors(defs: SensorMarkerDef[]): void {
+    if (!this.sensorRoot) {
+      this.sensorRoot = new THREE.Group();
+      this.sensorRoot.name = 'sensorMarkers';
+      this.scene.add(this.sensorRoot);
+    }
+    const seen = new Set<string>();
+    for (const d of defs) {
+      seen.add(d.id);
+      const m = this.sensorMarkers.get(d.id);
+      if (!m) {
+        const nm = this.buildSensorMarker(d);
+        this.sensorMarkers.set(d.id, nm);
+        this.sensorRoot.add(nm.group);
+      } else if (m.state !== d.state) {
+        this.applySensorState(m, d.state);
+      }
+    }
+    for (const [id, m] of this.sensorMarkers) {
+      if (seen.has(id)) continue;
+      this.sensorRoot.remove(m.group);
+      disposeSensorObject(m.group);
+      this.sensorMarkers.delete(id);
+    }
+  }
+
+  private buildSensorMarker(d: SensorMarkerDef): SensorMarker {
+    const group = new THREE.Group();
+    group.position.set(d.x, 0, d.z);
+    group.userData.infra = false;
+
+    // rest elevation for structure-mounted nodes: structure top if present
+    const ci = clamp(Math.round((d.x / LX) * NX - 0.5), 0, NX - 1);
+    const cj = clamp(Math.round((d.z + LZ / 2) / DZ - 0.5), 0, NZ - 1);
+    const sTop = this.structBase[cj * NX + ci];
+    const y = d.kind === 'structure' && sTop > -500 ? sTop : bedAt(d.x, d.z);
+    group.position.y = y;
+
+    if (d.kind === 'reservoir') {
+      // buoy: float collar + mast, floats on the simulated surface per frame
+      const collar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.62, 0.52, 0.42, 14),
+        new THREE.MeshStandardMaterial({ color: 0xe8b83a, roughness: 0.55, metalness: 0.15 }),
+      );
+      collar.position.y = 0.21;
+      collar.castShadow = true;
+      const mast = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.045, 0.045, 1.7, 6),
+        new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.4, metalness: 0.6 }),
+      );
+      mast.position.y = 1.15;
+      group.add(collar, mast);
+    } else {
+      // pedestal node bolted to the wall / apron
+      const box = new THREE.Mesh(
+        new THREE.BoxGeometry(0.55, 0.4, 0.4),
+        new THREE.MeshStandardMaterial({ color: 0xd7d2c8, roughness: 0.65, metalness: 0.1 }),
+      );
+      box.position.y = 0.2;
+      box.castShadow = true;
+      const mast = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.035, 1.35, 6),
+        new THREE.MeshStandardMaterial({ color: 0x8f979f, roughness: 0.4, metalness: 0.6 }),
+      );
+      mast.position.y = 0.95;
+      group.add(box, mast);
+    }
+
+    const beaconMat = new THREE.MeshStandardMaterial({
+      color: 0x111111,
+      emissive: SENSOR_STATE_COLOR.ok,
+      emissiveIntensity: 0.9,
+      roughness: 0.3,
+    });
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), beaconMat);
+    beacon.position.y = d.kind === 'reservoir' ? 2.05 : 1.68;
+    group.add(beacon);
+
+    // expanding alert ring (warn/alarm only)
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: SENSOR_STATE_COLOR.ok,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.08, 40), ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.12;
+    ring.visible = false;
+    group.add(ring);
+
+    const label = makeSensorLabel(d.id);
+    label.position.y = beacon.position.y + 0.85;
+    group.add(label);
+
+    const m: SensorMarker = {
+      id: d.id, kind: d.kind, state: 'ok', group,
+      beacon, beaconMat, ring, ringMat, label,
+      phase: Math.random() * Math.PI * 2,
+      y,
+    };
+    this.applySensorState(m, d.state);
+    return m;
+  }
+
+  private applySensorState(m: SensorMarker, state: SensorMarkerState): void {
+    m.state = state;
+    const col = SENSOR_STATE_COLOR[state];
+    m.beaconMat.emissive.setHex(col);
+    if (m.ringMat) m.ringMat.color.setHex(col);
+  }
+
+  /** Local water-surface elevation (floats on real solver state; grounds when dry). */
+  private waterYAt(x: number, z: number): number {
+    const col = clamp(Math.floor((x / LX) * DOWN_W), 0, DOWN_W - 1);
+    const row = clamp(Math.floor(((z + LZ / 2) / LZ) * DOWN_H), 0, DOWN_H - 1);
+    const k = (row * DOWN_W + col) * 4;
+    const d = this.field.data;
+    if (d[k + 3] > 0.06) return d[k]; // eta
+    return bedAt(x, z) + 0.05;
+  }
+
+  private updateSensors(dtReal: number): void {
+    if (!this.sensorRoot || this.sensorMarkers.size === 0) return;
+    this.sensorClock += dtReal;
+    const t = this.sensorClock;
+    for (const m of this.sensorMarkers.values()) {
+      if (m.kind === 'reservoir') {
+        const wx = m.group.position.x;
+        const wz = m.group.position.z;
+        m.group.position.y = this.waterYAt(wx, wz) + Math.sin(t * 1.7 + m.phase) * 0.07;
+      }
+      m.beaconMat.emissiveIntensity = m.state === 'alarm'
+        ? 1.5 + Math.pow(Math.sin(t * 9 + m.phase) * 0.5 + 0.5, 2) * 1.9
+        : m.state === 'warn'
+          ? 1.1 + Math.sin(t * 5 + m.phase) * 0.55
+          : 0.85;
+      if (m.state === 'alarm') {
+        m.beacon.scale.setScalar(1 + Math.sin(t * 9 + m.phase) * 0.22);
+      } else {
+        m.beacon.scale.setScalar(1);
+      }
+      if (m.ring && m.ringMat) {
+        m.ring.visible = m.state !== 'ok';
+        if (m.state !== 'ok') {
+          const f = (t * 0.55 + m.phase * 0.13) % 1;
+          m.ring.scale.setScalar(0.6 + f * 2.6);
+          m.ringMat.opacity = (1 - f) * (m.state === 'alarm' ? 0.75 : 0.4);
+        }
+      }
+    }
+  }
+
   private computeStats(): DamStats {
     const d = this.field.data;
     const dzC = LZ / DOWN_H;
@@ -1354,6 +1584,7 @@ export class DamSim {
       gauges,
       floodedCells,
       qOut: gauges[0]?.q ?? 0,
+      inflow: this.baseInflow + this.rainInflow,
     };
   }
 
