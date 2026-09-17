@@ -1161,7 +1161,346 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   poles.castShadow = true;
   group.add(poles, heads);
 
-// __WORLD_PART5__
+  // ---- farmland: crop fields, farmsteads, hay bales -----------------------
+  // southern belt + SW lakeside quadrant + east orchard — the same plots the
+  // terrain painter stains as farmland, so soil colour and props agree
+  {
+    const FARMS: { x: number; z: number; w: number; d: number; k: number }[] = [
+      { x: 56, z: 52, w: 13, d: 9, k: 0 }, { x: 72, z: 54, w: 13, d: 9, k: 1 },
+      { x: 90, z: 52, w: 12, d: 9, k: 2 }, { x: 108, z: 52, w: 12, d: 9, k: 0 },
+      { x: 124, z: 50, w: 12, d: 9, k: 1 }, { x: 140, z: 52, w: 11, d: 8, k: 2 },
+      { x: 18, z: 8, w: 11, d: 8, k: 1 }, { x: 30, z: 16, w: 10, d: 8, k: 2 },
+      { x: 20, z: 28, w: 10, d: 8, k: 0 }, { x: 34, z: 34, w: 9, d: 8, k: 1 },
+      { x: 146, z: 40, w: 10, d: 8, k: 2 }, // east orchard plot
+    ];
+    const fieldMats = [
+      new THREE.MeshStandardMaterial({ map: makeFieldTex('#8a7a3d', '#79692f'), roughness: 0.95 }), // ripe grain
+      new THREE.MeshStandardMaterial({ map: makeFieldTex('#5d7a37', '#4e6a2c'), roughness: 0.95 }), // green crops
+      new THREE.MeshStandardMaterial({ map: makeFieldTex('#7a5f38', '#6a5029'), roughness: 0.95 }), // tilled soil
+    ];
+    const cropGeo = new THREE.BoxGeometry(1, 0.2, 1);
+    const cropMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
+    const cropColors = [0xcfc06a, 0x7fae4a, 0xa98d55];
+    const cropRows = new THREE.InstancedMesh(cropGeo, cropMat, FARMS.length * 7);
+    let ri = 0;
+    const barnMat = new THREE.MeshStandardMaterial({ color: 0x8a3f2e, roughness: 0.85 });
+    const barnRoofMat = new THREE.MeshStandardMaterial({ color: 0x5d5a52, roughness: 0.9 });
+    const siloMat = new THREE.MeshStandardMaterial({ color: 0xc9c4b4, roughness: 0.7, metalness: 0.15 });
+    const hayMat = new THREE.MeshStandardMaterial({ color: 0xb59f4b, roughness: 1 });
+    const hays = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.42, 0.42, 0.62, 9), hayMat, 26);
+    let hi = 0;
+    FARMS.forEach((f, fi) => {
+      const g = bedAt(f.x, f.z);
+      const fRot = (hashRnd(fi * 3.3) - 0.5) * 0.16;
+      const field = new THREE.Mesh(new THREE.PlaneGeometry(f.w, f.d), fieldMats[f.k]);
+      field.rotation.x = -Math.PI / 2;
+      field.rotation.z = fRot;
+      field.position.set(f.x, g + 0.09, f.z);
+      field.receiveShadow = true;
+      group.add(field);
+      // crop rows spanning the patch (instanced, tinted per crop)
+      eu.set(0, fRot, 0);
+      q.setFromEuler(eu);
+      for (let k = 0; k < 7; k++) {
+        const zz = f.z + ((k + 0.5) / 7 - 0.5) * f.d * 0.82;
+        m4.compose(new THREE.Vector3(f.x, g + 0.16, zz), q, new THREE.Vector3(f.w * 0.9, 1, 0.5));
+        cropRows.setMatrixAt(ri, m4);
+        cropRows.setColorAt(ri, col.setHex(cropColors[f.k]));
+        ri++;
+      }
+      // farmstead: barn + silo at the south edge, clear of the lane
+      const bx = f.x + (hashRnd(fi * 7.7) - 0.5) * f.w * 0.3;
+      const bz = f.z + f.d * 0.62;
+      const barn = new THREE.Group();
+      const hall = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.7, 2.0), barnMat);
+      hall.position.y = 0.85;
+      hall.castShadow = true;
+      const r1 = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.12, 2.3), barnRoofMat);
+      r1.position.set(-0.78, 1.98, 0);
+      r1.rotation.z = 0.62;
+      const r2 = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.12, 2.3), barnRoofMat);
+      r2.position.set(0.78, 1.98, 0);
+      r2.rotation.z = -0.62;
+      const silo = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 2.8, 10), siloMat);
+      silo.position.set(2.1, 1.4, 0.3);
+      silo.castShadow = true;
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.55, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), siloMat);
+      cap.position.set(2.1, 2.8, 0.3);
+      barn.add(hall, r1, r2, silo, cap);
+      barn.position.set(bx, bedAt(bx, bz), bz);
+      barn.rotation.y = hashRnd(fi * 5.1) * Math.PI * 2;
+      group.add(barn);
+      // hay bales
+      const nH = 2 + Math.floor(hashRnd(fi * 9.9) * 2);
+      for (let k = 0; k < nH && hi < 26; k++) {
+        const hx = f.x + (hashRnd(fi * 13 + k) - 0.5) * f.w;
+        const hz = f.z - f.d * 0.55 + (hashRnd(fi * 17 + k) - 0.5) * 2;
+        m4.makeTranslation(hx, bedAt(hx, hz) + 0.42, hz);
+        m4.multiply(new THREE.Matrix4().makeRotationY(hashRnd(hx * 3 + hz) * Math.PI));
+        hays.setMatrixAt(hi++, m4);
+      }
+    });
+    cropRows.count = ri;
+    cropRows.castShadow = true;
+    if (cropRows.instanceColor) cropRows.instanceColor.needsUpdate = true;
+    group.add(cropRows);
+    hays.count = hi;
+    hays.castShadow = true;
+    group.add(hays);
+    // east orchard — row-planted fruit trees on the east plot
+    for (let ox = 0; ox < 4; ox++) {
+      for (let oz = 0; oz < 3; oz++) {
+        const tx = 142 + ox * 2.6;
+        const tz = 37 + oz * 2.8;
+        const g = bedAt(tx, tz);
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.14, 1.1, 5), trunkMat);
+        trunk.position.set(tx, g + 0.55, tz);
+        const crown = new THREE.Mesh(new THREE.DodecahedronGeometry(0.72 + hashRnd(ox * 7 + oz) * 0.3, 0), leafMat);
+        crown.position.set(tx, g + 1.45, tz);
+        crown.castShadow = true;
+        group.add(trunk, crown);
+      }
+    }
+  }
+
+  // ---- civic landmark complexes --------------------------------------------
+  // hospital, school, factory, waterworks, fuel depot, substation, civic hall
+  // (each tucked inside its reserved clear rect, dodging the street grid)
+  const civicRed = new THREE.MeshStandardMaterial({ color: 0xc24338, roughness: 0.7 });
+
+  // hospital — white slab + rooftop cross + entrance canopy (NE quadrant)
+  {
+    const hx = 126.8, hz = 7.4;
+    const g = bedAt(hx, hz);
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(5.8, 5.6, 3.4), matWhite());
+    slab.position.set(hx, g + 2.8, hz);
+    slab.castShadow = slab.receiveShadow = true;
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(4.0, 3.2, 3.0), matWhite());
+    wing.position.set(hx, g + 1.6, hz - 2.5);
+    wing.castShadow = true;
+    const c1 = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.14, 0.4), civicRed);
+    const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.14, 1.5), civicRed);
+    c1.position.set(hx, g + 5.85, hz);
+    c2.position.set(hx, g + 5.85, hz);
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 1.6), matConcrete());
+    canopy.position.set(hx, g + 2.6, hz + 2.4);
+    group.add(slab, wing, c1, c2, canopy);
+  }
+
+  // school — hall + paved yard + flagpole (west quarter)
+  {
+    const sx2 = 87, sz2 = 8.4;
+    const g = bedAt(sx2, sz2);
+    const hall = new THREE.Mesh(new THREE.BoxGeometry(4.6, 2.8, 3.2), matWhite());
+    hall.position.set(sx2, g + 1.4, sz2);
+    hall.castShadow = hall.receiveShadow = true;
+    const yard = new THREE.Mesh(new THREE.PlaneGeometry(7.5, 4.4), paving);
+    yard.rotation.x = -Math.PI / 2;
+    yard.position.set(sx2, g + 0.14, sz2 + 3.4);
+    yard.receiveShadow = true;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.6, 6), matSteel());
+    pole.position.set(sx2 - 3.4, g + 2.3, sz2 + 3.4);
+    const flagS = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.55), new THREE.MeshStandardMaterial({ color: 0x2f6db4, roughness: 0.8, side: THREE.DoubleSide }));
+    flagS.position.set(sx2 - 3.85, g + 4.3, sz2 + 3.4);
+    group.add(hall, yard, pole, flagS);
+  }
+
+  // factory — sawtooth-roof shed + chimneys (south civic band)
+  {
+    const fx = 104, fz = 37.2;
+    const g = bedAt(fx, fz);
+    const hall = new THREE.Mesh(new THREE.BoxGeometry(12, 4.2, 5.4), matConcreteDark());
+    hall.position.set(fx, g + 2.1, fz);
+    hall.castShadow = hall.receiveShadow = true;
+    group.add(hall);
+    for (let k = 0; k < 4; k++) {
+      const tooth = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.12, 5.8), matGalvanised());
+      tooth.position.set(fx - 4.5 + k * 3.0, g + 4.85, fz);
+      tooth.rotation.z = 0.5;
+      tooth.castShadow = true;
+      group.add(tooth);
+    }
+    for (const cx of [fx - 4, fx + 4]) {
+      const chim = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.62, 6.8, 9), matConcreteDark());
+      chim.position.set(cx, g + 5.4, fz + 1.2);
+      chim.castShadow = true;
+      group.add(chim);
+    }
+  }
+
+  // waterworks — pump hall + twin tanks on the river bank (riverside drive)
+  {
+    const wx = 62, wz = -37;
+    const g = bedAt(wx, wz);
+    const hall = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.2, 3.0), matWhite());
+    hall.position.set(wx, g + 1.1, wz);
+    hall.castShadow = true;
+    const tankMat = new THREE.MeshStandardMaterial({ color: 0x7fa3b8, roughness: 0.55, metalness: 0.3 });
+    for (const tx of [wx - 2.8, wx + 2.8]) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 2.2, 12), tankMat);
+      tank.position.set(tx, g + 1.1, wz + 0.4);
+      tank.castShadow = true;
+      group.add(tank);
+    }
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 5.8, 7), matDark());
+    pipe.rotation.z = Math.PI / 2;
+    pipe.position.set(wx, g + 0.5, wz + 2.0);
+    group.add(hall, pipe);
+  }
+
+  // fuel depot — horizontal tanks in a bund (east district)
+  {
+    const fx = 137.2, fz = 18;
+    const g = bedAt(fx, fz);
+    const bund = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.5, 8.2), matConcrete());
+    bund.position.set(fx, g + 0.1, fz);
+    bund.receiveShadow = true;
+    const tankMatF = new THREE.MeshStandardMaterial({ color: 0xb8b2a4, roughness: 0.6, metalness: 0.25 });
+    for (let k = 0; k < 3; k++) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 3.6, 12), tankMatF);
+      tank.rotation.x = Math.PI / 2;
+      tank.position.set(fx, g + 0.9, fz - 2.6 + k * 2.6);
+      tank.castShadow = true;
+      group.add(tank);
+    }
+    const pump = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.5, 1.5), matGalvanised());
+    pump.position.set(fx + 2.2, g + 0.75, fz);
+    pump.castShadow = true;
+    group.add(bund, pump);
+  }
+
+  // substation — gravel pad, transformers, gantry (east district)
+  {
+    const vx = 136.2, vz = -2.9;
+    const g = bedAt(vx, vz);
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.14, 5.6), new THREE.MeshStandardMaterial({ color: 0x9a968c, roughness: 0.98 }));
+    pad.position.set(vx, g + 0.07, vz);
+    pad.receiveShadow = true;
+    for (const [tx, tz] of [[vx - 1.1, vz - 1.2], [vx - 1.1, vz + 1.2]] as const) {
+      const xfmr = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.3, 1.1), matDark());
+      xfmr.position.set(tx, g + 0.8, tz);
+      xfmr.castShadow = true;
+      group.add(xfmr);
+    }
+    for (const gz2 of [vz - 2.2, vz + 2.2]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 4.4, 6), matGalvanised());
+      post.position.set(vx + 1.6, g + 2.2, gz2);
+      post.castShadow = true;
+      group.add(post);
+    }
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 4.6), matGalvanised());
+    beam.position.set(vx + 1.6, g + 4.2, vz);
+    group.add(pad, beam);
+  }
+
+  // civic hall — columned portico + pediment (south civic band)
+  {
+    const cx = 127, cz = 26.4;
+    const g = bedAt(cx, cz);
+    const hall = new THREE.Mesh(new THREE.BoxGeometry(5.2, 3.4, 3.6), matWhite());
+    hall.position.set(cx, g + 1.7, cz);
+    hall.castShadow = hall.receiveShadow = true;
+    const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 1.6, 1.1, 3), matWhite());
+    ped.rotation.x = Math.PI / 2;
+    ped.rotation.y = Math.PI / 2;
+    ped.position.set(cx, g + 4.0, cz - 1.95);
+    ped.castShadow = true;
+    group.add(hall, ped);
+    for (let k = 0; k < 4; k++) {
+      const column = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 2.6, 8), matWhite());
+      column.position.set(cx - 1.8 + k * 1.2, g + 1.3, cz - 2.05);
+      column.castShadow = true;
+      group.add(column);
+    }
+  }
+
+  return { group, districts, floodTrees };
+}
+
+// ============================================================ FAR TERRAIN
+// The solver domain is a hard-edged plane; this dresses the world beyond it so
+// the square canvas never shows its cut: the downstream valley keeps running
+// east past the exit gorge (the flood river visibly continues toward the
+// horizon), and a rounded forested mountain ring closes the view on all four
+// sides. Heights blend out of bedAt() so the seam against the solver mesh is
+// invisible, and colour comes from the same terrainColor painter.
+export function buildFarTerrain(): { group: THREE.Group } {
+  const group = new THREE.Group();
+
+  const sstep = (a: number, b: number, v: number): number => {
+    const t = clamp((v - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  };
+
+  // distant range: rolling, forested, no craggy peaks (matches the rim look)
+  const ringH = (x: number, z: number): number =>
+    20 + 26 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
+       + 7 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
+
+  const farH = (x: number, z: number): number => {
+    // east corridor: bedAt stays well-behaved east of the canvas, so the
+    // valley (channel + widening walls) keeps running out toward the horizon
+    // and the range closes over it further downstream
+    const dzo = z - axisAt(LX);
+    if (x > LX && Math.abs(dzo) < 46) {
+      const valley = bedAt(x, z);
+      const t = Math.max(sstep(175, 255, x), sstep(34, 46, Math.abs(dzo)));
+      return valley + (ringH(x, z) + 6 - valley) * t;
+    }
+    // everywhere else: hold the boundary profile, fade into the range
+    const dOut = Math.max(-x, x - LX, -LZ / 2 - z, z - LZ / 2, 0);
+    const base = bedAt(clamp(x, 1.5, LX - 1.5), clamp(z, -LZ / 2 + 1, LZ / 2 - 1));
+    const t = sstep(2, 70, dOut);
+    return base + (ringH(x, z) - base) * t;
+  };
+
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0, envMapIntensity: 0.18 });
+  const tc = { r: 0, g: 0, b: 0 };
+  const col = new THREE.Color();
+
+  const strip = (x0: number, x1: number, z0: number, z1: number, nx: number, nz: number): void => {
+    const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0, nx, nz);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate((x0 + x1) / 2, 0, (z0 + z1) / 2);
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const colors = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      const y = farH(x, z);
+      pos.setY(i, y);
+      const e = 3;
+      const sx = (farH(x + e, z) - farH(x - e, z)) / (2 * e);
+      const sz = (farH(x, z + e) - farH(x, z - e)) / (2 * e);
+      terrainColor(x, z, y, Math.sqrt(sx * sx + sz * sz), tc);
+      col.setRGB(tc.r, tc.g, tc.b, THREE.SRGBColorSpace);
+      colors[i * 3] = col.r;
+      colors[i * 3 + 1] = col.g;
+      colors[i * 3 + 2] = col.b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    group.add(new THREE.Mesh(geo, mat));
+  };
+
+  // four aprons framing the canvas: north / south rims, west headwall, east
+  // valley continuation (the east strip carries the river out of frame)
+  strip(-260, 420, -265, -LZ / 2, 150, 40);
+  strip(-260, 420, LZ / 2, 265, 150, 40);
+  strip(-260, 0, -LZ / 2, LZ / 2, 56, 72);
+  strip(LX, 420, -LZ / 2, LZ / 2, 60, 72);
+
+  // haze backstop far below the terrain so no sky peeks under the outer ranges
+  const back = new THREE.Mesh(
+    new THREE.CircleGeometry(2600, 40),
+    new THREE.MeshBasicMaterial({ color: 0xa8bcc8 }),
+  );
+  back.rotation.x = -Math.PI / 2;
+  back.position.set(LX / 2, 0.4, 0);
+  group.add(back);
+
+  return { group };
+}
 
 
 

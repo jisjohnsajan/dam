@@ -697,3 +697,21 @@ Stage Summary:
   never resets, pause-safe.
 - Key files: src/lib/dam/{terrain,world,props,engine}.ts, src/components/damsafe/panels.tsx,
   src/app/page.tsx. Solver/scenario/telemetry/camera systems untouched.
+
+---
+Task ID: fix-world-truncation
+Agent: Super Z (main agent)
+Task: Fix build error — src/lib/dam/world.ts truncated mid-file ("Expected '}', got '<eof>'" at the __WORLD_PART5__ marker); verify the square-canvas world actually renders on the site.
+
+Work Log:
+- Diagnosed world.ts: file ended at line 1162 inside buildTown() (after the streetlights block) with an unresolved // __WORLD_PART5__ marker; the planned Part 5 (farmland, civic landmarks, function tail, buildFarTerrain) was never written. engine.ts imports buildFarTerrain from ./world, so the module failed to parse.
+- Restored Part 5 in three edits: (1) farmland inside buildTown — 11 crop-field plots matching the terrainColor farm belts (south belt + SW lakeside + east orchard) with striped canvas field textures, instanced crop rows tinted per crop, barn+silo farmsteads, hay bales, row-planted orchard; (2) seven civic landmark complexes tucked into their reserved CLEAR_RECTS while dodging the street grid — hospital (white slab + red cross + canopy), school (hall + yard + flagpole), factory (sawtooth roof + chimneys), waterworks (pump hall + twin tanks by the riverside), fuel depot (tanks in a bund), substation (pad + transformers + gantry), civic hall (columned portico + pediment); closed buildTown with `return { group, districts, floodTrees }`; (3) buildFarTerrain() — four terrain aprons framing the solver domain (N/S rims, west headwall, east valley continuation), heights blended out of bedAt() so the seam against the solver mesh is invisible, east strip carries the river channel out past the exit gorge before the range closes over it, distant rolling mountain ring via fbm, coloured with the same terrainColor painter + a haze backstop disc below so no sky peeks under the outer ranges.
+- Fixed one type error: makeFieldTex returns textures — wrapped in MeshStandardMaterial for the field meshes.
+- tsconfig.json: excluded non-app scaffolding (examples/, skills/) and the stale pre-square-canvas check script (scripts/check_bowl.ts, references removed BOWL_CX/BOWL_R) so tsc + production build are clean again.
+- Verified: npx tsc --noEmit clean; npm run build succeeds; dev server (next dev :3000) hot-reloaded the fix.
+- Browser verification (headless 1440x810): page loads with ZERO errors/console warnings; Overview view shows the square-canvas layout — dam+reservoir top-left, river east along the upper canvas, elevated expressway+bridge, glass/mid-rise towers across the centre, villages, crop fields, rim forest, far mountain ring closing the horizon; triggered Dam break at 8x from Top view — outflow 19,073 m³/s, flood wave spread from the dam across the surrounding canvas (city plain + expressway + toward farms), G1 887→970 m³/s @ 4.6-4.7 m depth / ~15 m/s; FLOOD IMPACT panel: 2.0 km² flooded, 6,094 exposed, 2,058 buildings, 41 km roads, max depth 8.7 m, hospital/WTP/bridge INUNDATED; Reset returned the scene to baseline. All UI panels, quick actions, camera presets and the time machine intact.
+
+Stage Summary:
+- The site now truly shows the square-canvas DAMSAFE world (previous invisibility was the truncated world.ts — the module never parsed, so nothing could mount).
+- Part 5 of the world build is complete: farmland, civic landmarks and the far-terrain ring close the square canvas and the horizon.
+- Key files: src/lib/dam/world.ts (completed), tsconfig.json (excludes), verified via scripts/verify_world_overview.png, verify_flood_top.png, verify_flood_impact.png, verify_final_overview.png.
