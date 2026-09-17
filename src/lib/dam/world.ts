@@ -7,7 +7,7 @@
 // running on its own domain, so the powerhouse/town sit on bedAt() ground and
 // the flood wave genuinely reaches them during scenarios.
 import * as THREE from 'three';
-import { LX, LZ, bedAt, terrainColor, fbm } from './terrain';
+import { LX, LZ, bedAt, terrainColor, fbm, BOWL_CX, BOWL_R } from './terrain';
 
 const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
 
@@ -367,7 +367,7 @@ interface StreetSeg { pts: [number, number][]; w: number }
 
 const TOWN_STREETS: StreetSeg[] = [
   // right bank (z > 0) — main district
-  { pts: [[152, 20.8], [158, 21.4], [166, 22.0], [174, 22.6], [182, 23.4], [188, 24.2]], w: 3.0 },
+  { pts: [[152, 20.8], [158, 21.4], [166, 22.0], [174, 22.6], [182, 23.4], [186, 24.0]], w: 3.0 },
   { pts: [[156.5, 21.0], [157.2, 30], [157.6, 38]], w: 2.6 },
   { pts: [[164.5, 21.6], [165.2, 30], [165.8, 38.5]], w: 2.6 },
   { pts: [[172.5, 22.2], [173.2, 30], [173.8, 37]], w: 2.6 },
@@ -381,14 +381,16 @@ const TOWN_STREETS: StreetSeg[] = [
 ];
 
 // ---- ring-city layout (open-world district wrapped around the valley floor)
-const TOWN_C: [number, number] = [146, 0]; // ring centre on the river axis
+const TOWN_C: [number, number] = [BOWL_CX, 0]; // ring centre = circular bowl centre
 const RINGS: { r: number; w: number }[] = [
-  { r: 21, w: 3.4 },
-  { r: 31.5, w: 3.2 },
-  { r: 42, w: 3.0 },
+  { r: 17.5, w: 4.0 },
+  { r: 24.5, w: 4.2 },
+  { r: 31.5, w: 4.0 },
+  { r: 38.5, w: 3.8 },
+  { r: 45.5, w: 3.4 },
 ];
-const RING_HALF = 1.72; // rad — downstream-facing arcs around the valley
-const RADIAL_ANGLES = [0.72, 1.18, 1.55]; // rad, mirrored per bank
+const RING_HALF = 2.0; // rad — arcs wrap ~230° around the downstream bowl
+const RADIAL_ANGLES = [0.42, 0.8, 1.18, 1.56]; // rad, mirrored per bank
 
 function arcPts(r: number, half: number, n: number): [number, number][] {
   const pts: [number, number][] = [];
@@ -421,7 +423,7 @@ for (const pts of RING_PTS) pushClear(pts);
 const RADIAL_PTS: [number, number][][] = [];
 for (const a of RADIAL_ANGLES)
   for (const s of [1, -1]) {
-    const pts = rayPts(a * s, 19.5, 43.5, 8);
+    const pts = rayPts(a * s, 15.5, 47.5, 10);
     RADIAL_PTS.push(pts);
     pushClear(pts);
   }
@@ -455,9 +457,9 @@ function distToPaths(x: number, z: number): number {
 const CLEAR_RECTS: [number, number, number, number][] = [
   [166, 27.5, 12, 12], [160.5, 26.5, 10, 7], [172, 35.5, 21, 14], // plaza+clock, market, pitch
   [176, -30, 6, 6], [154, -34, 8, 6], [158, 36, 8, 8], // water tower, temple, park grove
-  [178, -38, 14, 9], [183, -30, 10, 12], [176, 39, 13, 8], [185, 32, 9, 10], [186, -20, 8, 10], // farms
+  [176, -35, 14, 9], [180, -28, 10, 12], [174, 36, 13, 8], [182, 30, 9, 10], [186, -20, 8, 10], // farms
   [127.5, 27.5, 7, 6], [135, 29.5, 8, 6], [143, 28.5, 6, 6], // industry sheds
-  [159, 17, 7, 7], [172, -18.5, 7, 7], [183, 33, 7, 7], [150, -24, 7, 7], [186, -36, 7, 7], // landmark towers
+  [159, 17, 7, 7], [172, -18.5, 7, 7], [181, 29, 7, 7], [150, -24, 7, 7], [181, -31, 7, 7], // landmark towers
 ];
 function clearOfSites(x: number, z: number, m = 1.4): boolean {
   for (const [cx, cz, w, d] of CLEAR_RECTS)
@@ -712,9 +714,12 @@ export function buildTown(): { group: THREE.Group } {
   // old-town grid streets
   for (const st of TOWN_STREETS) flatRibbon(group, st.pts, st.w, asphalt);
 
-  // ---- ring boulevards — arched decks over the river channel (bridges)
+  // ---- ring boulevards — arched decks over the river channel (bridges);
+  // lighter asphalt so the concentric arcs read from the air like the
+  // reference map's ring highways
+  const ringMat = new THREE.MeshStandardMaterial({ color: 0x585862, roughness: 0.9 });
   RING_PTS.forEach((pts, ri) => {
-    const P = profileRibbon(group, pts, RINGS[ri].w, asphalt, (x, z) => {
+    const P = profileRibbon(group, pts, RINGS[ri].w, ringMat, (x, z) => {
       const g = bedAt(x, z);
       const arch = Math.max(0, 1 - Math.abs(z) / 14);
       return Math.max(g + 0.16, bedAt(x, 0) + 3.6 + 1.15 * arch * arch);
@@ -743,35 +748,40 @@ export function buildTown(): { group: THREE.Group } {
   const spotsH: BSpot[] = [];
   const tones = [0xd9cdb4, 0xcbb99b, 0xd8d2c4, 0xc2b49a, 0xd3c1a6, 0xbfae94, 0xded6c6, 0xb7a68c];
   const glassTones = [0x8fa4b2, 0xa3b8c4, 0x7f98a8, 0xb0c2cc];
-  // deterministic scatter across the whole valley floor — dense ring districts
+  // deterministic scatter — CONCENTRIC RING DISTRICTS: buildings arrayed in
+  // tangentially-oriented arcs around the bowl centre (the reference map's
+  // circular city), towers toward the core, terraced low-rise at the rim
   let seed = 1;
   const nextRnd = () => hashRnd(seed++ * 12.9898);
-  for (let gx = 121; gx <= 189; gx += 3.9) {
-    for (const zs of [1, -1]) {
-      for (let g = 0; g < 11; g++) {
-        const z = zs * (13.9 + g * 3.6 + nextRnd() * 1.6);
-        const x = gx + nextRnd() * 2.2;
-        if (Math.abs(z) > 49.5 || x > 189.5) continue;
-        const r = Math.hypot(x - TOWN_C[0], z);
-        if (r < 15.5) continue;
-        if (distToPaths(x, z) < 3.2) continue;
-        if (!clearOfSites(x, z)) continue;
-        const ground = bedAt(x, z);
-        if (ground < 3.3 || ground > 16.5) continue;
-        const slope = Math.abs(bedAt(x + 2, z) - ground) + Math.abs(bedAt(x, z + 2) - ground);
-        if (slope > 2.1) continue;
-        if (nextRnd() < 0.16) continue;
-        // downtown weight — towers cluster on the inner rings near the dam
-        const core = clamp(1 - (r - 16) / 27, 0, 1);
-        const roll = nextRnd();
-        const rot = (nextRnd() - 0.5) * 0.5;
-        if (core > 0.4 && roll < 0.07 + 0.2 * core) {
-          spotsH.push({ x, z, w: 3.9 + nextRnd() * 1.6, d: 3.5 + nextRnd() * 1.5, h: 13.5 + nextRnd() * 9.5, rot, tone: Math.floor(nextRnd() * glassTones.length) });
-        } else if (roll < 0.5) {
-          spotsM.push({ x, z, w: 3.1 + nextRnd() * 1.4, d: 2.9 + nextRnd() * 1.3, h: 6.8 + nextRnd() * 6.2, rot, tone: Math.floor(nextRnd() * tones.length) });
-        } else {
-          spotsL.push({ x, z, w: 2.6 + nextRnd() * 1.6, d: 2.4 + nextRnd() * 1.5, h: 2.8 + nextRnd() * 3.4, rot, tone: Math.floor(nextRnd() * tones.length) });
-        }
+  const RING_BUILD_R = [16, 19.5, 23, 26.5, 30, 33.5, 37, 40.5, 44];
+  for (let ri = 0; ri < RING_BUILD_R.length; ri++) {
+    const r0 = RING_BUILD_R[ri];
+    const arc = 2 * RING_HALF * r0;
+    const n = Math.max(8, Math.floor(arc / 4.2));
+    for (let i = 0; i < n; i++) {
+      const a = -RING_HALF + (2 * RING_HALF * i) / (n - 1) + (nextRnd() - 0.5) * (2.6 / r0);
+      const r = r0 + (nextRnd() - 0.5) * 3.0;
+      const x = TOWN_C[0] + r * Math.cos(a);
+      const z = r * Math.sin(a);
+      if (Math.abs(z) < 12.4 || Math.abs(z) > 52) continue; // river corridor
+      if (distToPaths(x, z) < 3.0) continue;
+      if (!clearOfSites(x, z)) continue;
+      const ground = bedAt(x, z);
+      if (ground < 3.3 || ground > 16.5) continue;
+      const slope = Math.abs(bedAt(x + 2, z) - ground) + Math.abs(bedAt(x, z + 2) - ground);
+      if (slope > 2.1) continue;
+      if (nextRnd() < 0.13) continue;
+      // tangential orientation — street fronts follow the ring curvature
+      const rot = a + Math.PI / 2 + (nextRnd() - 0.5) * 0.26;
+      // skyline weight — towers cluster on the inner rings near the dam
+      const core = clamp(1 - (r - 15) / 30, 0, 1);
+      const roll = nextRnd();
+      if (core > 0.35 && roll < 0.06 + 0.22 * core) {
+        spotsH.push({ x, z, w: 3.9 + nextRnd() * 1.6, d: 3.5 + nextRnd() * 1.5, h: 13.5 + nextRnd() * 9.5, rot, tone: Math.floor(nextRnd() * glassTones.length) });
+      } else if (roll < 0.52) {
+        spotsM.push({ x, z, w: 3.1 + nextRnd() * 1.4, d: 2.9 + nextRnd() * 1.3, h: 6.8 + nextRnd() * 6.2, rot, tone: Math.floor(nextRnd() * tones.length) });
+      } else {
+        spotsL.push({ x, z, w: 2.6 + nextRnd() * 1.6, d: 2.4 + nextRnd() * 1.5, h: 2.8 + nextRnd() * 3.4, rot, tone: Math.floor(nextRnd() * tones.length) });
       }
     }
   }
@@ -813,7 +823,7 @@ export function buildTown(): { group: THREE.Group } {
   // ---- landmark skyline towers (glass shafts + crowns + aviation beacons)
   const beaconMat = new THREE.MeshStandardMaterial({ color: 0xff5540, emissive: 0xcc2200, emissiveIntensity: 1.4, roughness: 0.4 });
   for (const [tx, tz, th, gi] of [
-    [159, 17, 24, 0], [172, -18.5, 21, 1], [183, 33, 18, 0], [150, -24, 19, 1], [186, -36, 16, 0],
+    [159, 17, 24, 0], [172, -18.5, 21, 1], [181, 29, 18, 0], [150, -24, 19, 1], [181, -31, 16, 0],
   ] as const) {
     const tg = bedAt(tx, tz);
     const shaft = new THREE.Mesh(new THREE.BoxGeometry(4.4, th, 4.0), gi ? glassMat : midMat);
@@ -839,6 +849,24 @@ export function buildTown(): { group: THREE.Group } {
       const k = Math.floor(x / 3.6) % 2;
       treeSpots.push({ x, z: 11.8 + k * 0.7, s: 0.85 + hashRnd(x) * 0.5 });
       treeSpots.push({ x: x + 1.8, z: -11.8 - k * 0.7, s: 0.85 + hashRnd(x * 3) * 0.5 });
+    }
+    // ring-boulevard tree lines — green arcs echoing the circular layout
+    for (const rg of RINGS) {
+      const arc = 2 * RING_HALF * rg.r;
+      const nT = Math.max(10, Math.floor(arc / 6.2));
+      for (let i = 0; i <= nT; i++) {
+        const a = -RING_HALF + (2 * RING_HALF * i) / nT;
+        for (const off of [2.3, -2.3]) {
+          const x = TOWN_C[0] + (rg.r + off) * Math.cos(a);
+          const z = (rg.r + off) * Math.sin(a);
+          if (Math.abs(z) < 12.6) continue;
+          if (distToPaths(x, z) < 2.6) continue;
+          if (hashRnd(x * 5.1 + z * 3.3) < 0.3) continue;
+          const ground = bedAt(x, z);
+          if (ground < 3.3 || ground > 17) continue;
+          treeSpots.push({ x, z, s: 0.8 + hashRnd(x * 7 + z) * 0.5 });
+        }
+      }
     }
     for (let x = 124; x <= 189; x += 5.1) {
       for (const zs of [1, -1]) {
@@ -1058,10 +1086,10 @@ export function buildTown(): { group: THREE.Group } {
 
   // farmland patches on the outskirts
   const crops: [number, number, number, number, string, string][] = [
-    [178, -38, 13, 8, '#7a8f43', '#5d7034'],
-    [183, -30, 9, 11, '#9a8a4a', '#7d7038'],
-    [176, 39, 12, 7, '#8a9a4a', '#6d7d38'],
-    [185, 32, 8, 9, '#a5935a', '#87754a'],
+    [176, -35, 13, 8, '#7a8f43', '#5d7034'],
+    [180, -28, 9, 11, '#9a8a4a', '#7d7038'],
+    [174, 36, 12, 7, '#8a9a4a', '#6d7d38'],
+    [182, 30, 8, 9, '#a5935a', '#87754a'],
     [186, -20, 7, 9, '#7d8f4a', '#63753a'],
   ];
   for (const [fx, fz, fw, fd, ca, cb] of crops) {
@@ -1100,6 +1128,10 @@ export function buildTown(): { group: THREE.Group } {
 // runs on, then a broad amphitheater of SMOOTH ROLLING HILLS closes the
 // horizon — the user asked for NO jagged mountains, so every wall is a soft
 // exponential dome modulated by gentle fbm (no ridged-noise crest lines).
+function sstep(a: number, b: number, x: number): number {
+  const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
+  return t * t * (3 - 2 * t);
+}
 function farBed(x: number, z: number): number {
   const cx = clamp(x, 0.2, LX - 0.2);
   const cz = clamp(z, -LZ / 2 + 0.2, LZ / 2 - 0.2);
@@ -1129,6 +1161,20 @@ function farBed(x: number, z: number): number {
     const hills = 0.52 + 0.58 * m1 * m1; // 0.52..1.10 — rounded domes
     h += rise * hills * (0.7 + 0.55 * m2);
     h += (fbm(x * 0.033 + 3.3, z * 0.033 + 6.1, 2) - 0.5) * Math.min(2.2 + rise * 0.05, 5.5);
+  }
+  // Circular continuation of the city-bowl rim: beyond the solver domain the
+  // amphitheater keeps curving around the map (downstream half) instead of
+  // reading as a rectangular valley. Phased in over ~30 m past each domain
+  // edge so the seam stays flush with the domain mesh, and carved along the
+  // river corridor (|z| ≲ 10-26 m) so the waterway runs on to the horizon.
+  const rC = Math.hypot(x - BOWL_CX, z);
+  if (x > 104 && rC > BOWL_R) {
+    const beyond = Math.max(dUp, dDown, dNorth, dSouth);
+    const phase = sstep(1.5, 32, beyond);
+    const gorge = sstep(10, 26, Math.abs(z));
+    const rim = (1 - Math.exp(-(rC - BOWL_R) / 20)) * 30;
+    const m2 = fbm(x * 0.027 + 1.2, z * 0.027 + 8.8, 3);
+    h += rim * gorge * (0.7 + 0.55 * m2) * phase;
   }
   return h;
 }

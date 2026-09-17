@@ -582,3 +582,55 @@ Stage Summary:
   (bedAt walls, rockiness, terrainColor scrub/high/sand).
 - Physics regression-clean: solver untouched; scenario launch/drive/breach-arming/reset all
   verified live.
+
+---
+Task ID: 3
+Agent: Super Z (main)
+Task: Rebuild the world as a CIRCULAR MAP per the user's latest reference image ("u didnt make it like the image, need a circular map plz") — round bowl valley, ring city, turquoise reservoir, smooth (non-jagged) mountains.
+
+Work Log:
+- terrain.ts: replaced linear downstream valley widening with a CIRCULAR city bowl —
+  exported BOWL_CX=146 / BOWL_R=47; rim = (1-exp(-(rC-BOWL_R)/20))*30*rough*rimIn
+  (fades in x>DAM_X+2..+30 so reservoir walls + dam abutments stay intact upstream);
+  river-corridor walls now suppressed INSIDE the bowl (inBowl smoothstep 40.5→48.5)
+  so the city floor is open, and take over again outside the bowl (gorge through the rim);
+  removed old widen=(x-DAM_X)*0.44 term; added reservoir BULGE
+  12*exp(-((x-64)/22)^2)*smoothstep(104,88,x) so the lake reads as a rounded basin
+  (half-width 44→46.5→50.5→38.5→35.5 m along its length).
+- world.ts: TOWN_C now = bowl centre; RING boulevards expanded 3→5 rings
+  (r 17.5/24.5/31.5/38.5/45.5, widths up to 4.2 m, lighter 0x585862 asphalt so arcs read
+  from the air), RING_HALF 1.72→2.0 (~230° wrap); radial avenues 6→8 rays (r 15.5→47.5);
+  BUILDING SCATTER rewritten from rectangular grid to CONCENTRIC RING DISTRICTS:
+  9 building rings r=16..44, tangential orientation (rot=a+π/2+jitter), towers weighted
+  to inner rings / low-rise terraces outside; ring-boulevard tree lines added;
+  rim-clipped landmarks/farms moved inside r<46 (towers 183,33→181,29 & 186,-36→181,-31,
+  farms recentered); TOWN_STREETS right-bank trimmed to x≤186.
+- world.ts farBed: added CIRCULAR rim continuation beyond the solver domain (x>104,
+  rC>BOWL_R): phased in over 1.5→32 m past each domain edge (seam stays flush — no
+  cliffs), carved by river gorge sstep(10,26,|z|) so the waterway runs to the horizon;
+  combined with existing directional dome terms → continuous rounded amphitheater.
+- glsl.ts water: shallow (0.052,0.402,0.512)→(0.055,0.438,0.522), deep →(0.010,0.175,0.332),
+  in-scatter ambient bumped — vivid turquoise like the reference lake.
+- engine.ts CAM_PRESETS: overview → (312,178,76)→target(112,2,0) reference-like frontal
+  aerial; top → (126,335,6) full-circle top-down (z offset 6 avoids OrbitControls pole
+  instability of z=0.01); shadow/fog/solver untouched.
+- props.ts: 7 hand-placed shoreline trees that stood IN the reservoir moved onto the
+  south shore slopes (|z| 43-45).
+- Verified: scripts/check_bowl.ts transects (floor dish ≤1.8 m rise r30→36; rim 20-47 m
+  at r=68 all around; river exit bed 8.7→2.5 m while flanks climb to 38 m; abutments
+  27-31 m > crest 23; 0 building spots on bad ground); live browser screenshots:
+  Top view shows the full circular map (round lake, ring roads + radial avenues,
+  smooth green rim, river corridor through the centre); Overview matches reference
+  composition; Reset/Storm/Town/Top handlers verified; tsc(src) clean; production build ✓.
+- Note: agent-browser element refs go stale after React re-renders (~2 s stats ticks) —
+  clicking via JS dispatch on text-matched buttons is the reliable path in tests.
+
+Stage Summary:
+- The world is now a CIRCULAR MAP: closed bowl valley centred on (146,0) with the dam
+  notched into its upstream rim, rounded turquoise reservoir, ring-boulevard city with
+  tangential ring districts and radial avenues, river + expressway exiting through a
+  gorge in the downstream rim, and a smooth (no jagged peaks) mountain wall that continues
+  seamlessly into the far-terrain ring. Solver/scenario physics untouched.
+- Key files: src/lib/dam/terrain.ts (BOWL_CX/BOWL_R + bedAt), src/lib/dam/world.ts
+  (ring layout + farBed), src/lib/dam/engine.ts (cameras), src/lib/dam/glsl.ts (water),
+  src/lib/dam/props.ts (shore trees).

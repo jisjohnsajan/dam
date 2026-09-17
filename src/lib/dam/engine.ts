@@ -1698,10 +1698,10 @@ export class DamSim {
 
   setCamera(preset: CamPreset): void {
     const P: Record<CamPreset, [THREE.Vector3, THREE.Vector3]> = {
-      overview: [new THREE.Vector3(256, 148, 72), new THREE.Vector3(94, 8, 0)],
+      overview: [new THREE.Vector3(312, 178, 76), new THREE.Vector3(112, 2, 0)],
       dam: [new THREE.Vector3(76, 27, 52), new THREE.Vector3(114, 17, 0)],
       valley: [new THREE.Vector3(178, 9, 46), new THREE.Vector3(118, 10, -2)],
-      top: [new THREE.Vector3(96, 245, 0.01), new THREE.Vector3(96, 0, 0)],
+      top: [new THREE.Vector3(126, 335, 6), new THREE.Vector3(126, 0, 0)],
       reservoir: [new THREE.Vector3(74, 34, 44), new THREE.Vector3(20, 14, 0)],
       impact: [new THREE.Vector3(172, 118, 104), new THREE.Vector3(150, 2, 0)],
       town: [new THREE.Vector3(136, 64, 116), new THREE.Vector3(164, 6, 14)],

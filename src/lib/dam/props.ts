@@ -536,11 +536,12 @@ export function buildTrees(): { trees: Tree[]; group: THREE.Group } {
   const group = new THREE.Group();
   const trees: Tree[] = [];
   const spots: [number, number, number][] = [
-    // x, z, kind (0 palm, 1 broadleaf, 2 banana)
-    [96, -34, 0], [104, 33, 0], [88, 34, 1], [128, -26, 0], [136, 26, 0], [152, -25, 1],
-    [166, 26, 0], [120, 30, 2], [100, -36, 1], [174, -17, 0], [86, 30, 0], [146, -30, 0],
+    // x, z, kind (0 palm, 1 broadleaf, 2 banana) — kept on the reservoir's
+    // south shore slopes (t beyond the wall line) so nothing stands in the lake
+    [96, -45, 0], [104, 43, 0], [88, 44, 1], [128, -26, 0], [136, 26, 0], [152, -25, 1],
+    [166, 26, 0], [120, 30, 2], [100, -45, 1], [174, -17, 0], [86, 45, 0], [146, -30, 0],
     [132, 32, 1], [160, 31, 2], [170, 30, 0], [185, 24, 1], [186, -24, 0], [175, -28, 2],
-    [155, -30, 0], [142, 31, 0], [124, -31, 1], [112, 32, 0], [92, 30, 2], [181, 27, 0],
+    [155, -30, 0], [142, 31, 0], [124, -31, 1], [112, 44, 0], [92, 44, 2], [181, 27, 0],
   ];
   spots.forEach(([x, z, kind], idx) => {
     const ground = bedAt(x, z);

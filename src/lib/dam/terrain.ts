@@ -34,6 +34,13 @@ export const GORGE_HALF_W = 3.6; // inflow band |z| < GORGE_HALF_W
 export const SRC_X0 = 1.6;
 export const SRC_X1 = 6.0;
 
+// Circular city bowl (reference-map layout): the downstream valley is a ROUND
+// amphitheater centred on the ring city. The rim rises beyond BOWL_R from the
+// bowl centre all the way around, so the world reads as a closed circular map
+// with the dam notched into its upstream rim.
+export const BOWL_CX = 146; // bowl centre (on the river axis)
+export const BOWL_R = 47; // flat city-floor radius (m)
+
 // Stilling-basin apron: concrete slab on the channel bed at the dam toe.
 // props.ts draws the visual slab at the SAME elevation so the flood visibly
 // rides over it instead of vanishing under a floating slab.
@@ -83,23 +90,44 @@ export function bedAt(x: number, z: number): number {
     floor = 11.8 - t * 7.8; // downstream valley: 11.8 → 4.0
   }
   const wz = Math.abs(z);
-  // the gorge pinches at the dam site and OPENS into a broad downstream
-  // valley — the floodplain where the ring city stands (open-world floor)
-  const widen = x > DAM_X ? (x - DAM_X) * 0.44 : 0;
-  const w0 = 30 + 5 * Math.sin(x * 0.045 + 1.3) + 3 * Math.sin(x * 0.013) + widen;
+  // the gorge pinches at the dam site; downstream the CIRCULAR BOWL (not a
+  // linear widening) opens the floodplain where the ring city stands
+  const w0 = 30 + 4.5 * Math.sin(x * 0.045 + 1.3) + 2.6 * Math.sin(x * 0.013);
 
   // incised main channel downstream of the dam (gaussian cut, ~2.2 m deep)
   if (x > DAM_X + 4) {
     floor -= 2.2 * Math.exp(-(wz * wz) / 100);
   }
 
-  // valley walls — SMOOTH rolling slopes (no jagged cliffs): a soft
+  // rounder reservoir — the lake bulges in its middle reach so it reads as a
+  // rounded basin (reference map), fading out before the dam approach
+  const bulge = 12 * Math.exp(-((x - 64) * (x - 64)) / 484) * smoothstep(104, 88, x);
+  const wRes = w0 + bulge;
+
+  const rough = 0.85 + 0.3 * fbm(x * 0.08 + 3.7, z * 0.08, 3);
+
+  // ---- circular bowl geometry --------------------------------------------
+  // rC: radial distance from the bowl centre; tRim: distance beyond the rim.
+  // The rim fades in downstream of the dam so the reservoir walls still rule
+  // the upstream reach and the abutments key into undisturbed rock.
+  const rC = Math.hypot(x - BOWL_CX, z);
+  const tRim = rC - BOWL_R;
+  const rimIn = smoothstep(DAM_X + 2, DAM_X + 30, x);
+  // corridor walls are suppressed INSIDE the bowl (open city floor) and take
+  // over again outside it, closing the river gorge through the rim
+  const inBowl = smoothstep(BOWL_R - 6.5, BOWL_R + 1.5, rC);
+  const tCorr = wz - (x < DAM_X ? wRes : w0);
+
+  // river-corridor walls — SMOOTH rolling slopes (no jagged cliffs): a soft
   // exponential grade that eases out toward the domain edge, where the
   // far-terrain ring continues it as rounded, vegetated hills
-  if (wz > w0) {
-    const t = wz - w0;
-    const rough = 0.85 + 0.3 * fbm(x * 0.08 + 3.7, z * 0.08, 3);
-    floor += (1 - Math.exp(-t / 17)) * 21 * rough;
+  if (tCorr > 0) {
+    floor += (1 - Math.exp(-tCorr / 17)) * 21 * rough * inBowl;
+  }
+
+  // circular rim — the amphitheater wall enclosing the city on all sides
+  if (tRim > 0 && rimIn > 0) {
+    floor += (1 - Math.exp(-tRim / 20)) * 30 * rough * rimIn;
   }
 
   // Abutment shoulders — near the dam the valley walls rise just above the
@@ -114,6 +142,8 @@ export function bedAt(x: number, z: number): number {
   }
 
   // mountain wall closing the upstream end — with a carved river gorge
+  // (the bowl rim handles every other side; this headwall closes the circle
+  // behind the reservoir)
   if (x < 9) {
     const carve = smoothstep(GORGE_HALF_W, 8.5, wz); // 0 inside gorge, 1 outside
     if (x < 7) floor += (7 - x) * (7 - x) * 0.5 * (0.1 + 0.9 * carve);
