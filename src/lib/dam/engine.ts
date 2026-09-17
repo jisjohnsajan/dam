@@ -27,7 +27,7 @@ import {
   buildWarningSigns,
   RiverAudio, type DamProps, type House, type Tree, type Barrel, type Chunk, type InfraPin,
 } from './props';
-import { buildPowerhouse, buildTown, buildFarTerrain, type PowerhouseProps } from './world';
+import { buildPowerhouse, buildTown, buildFarTerrain, type PowerhouseProps, type DistrictBldgs, type FloodTrees, type RubbleField } from './world';
 import {
   DAMS, GAUGES, fracToSimLevel, simLevelToFrac,
   type DamId, type DamProfile, type FailureMechanism, type BreachLocation, type RainScenario,
@@ -220,6 +220,17 @@ export class DamSim {
   private chunks: Chunk[] = [];
   private floaters: Floater[] = [];
   private infraPins: InfraPin[] = [];
+  private townDistricts: DistrictBldgs[] = [];
+  private townTrees: FloodTrees | null = null;
+  private townRubble: RubbleField | null = null;
+  // scratch objects for the town-destruction instancing updates
+  private tvM = new THREE.Matrix4();
+  private tvQ = new THREE.Quaternion();
+  private tvE = new THREE.Euler();
+  private tvP = new THREE.Vector3();
+  private tvS = new THREE.Vector3();
+  private tvO = new THREE.Vector3();
+  private tvC = new THREE.Color();
   private sensorRoot: THREE.Group | null = null;
   private sensorMarkers = new Map<string, SensorMarker>();
   private sensorClock = 0;
@@ -686,6 +697,9 @@ export class DamSim {
     this.scene.add(dock.group);
     const tw = buildTown();
     this.scene.add(tw.group);
+    this.townDistricts = tw.districts;
+    this.townTrees = tw.floodTrees;
+    this.townRubble = tw.rubble;
     this.powerhouse = buildPowerhouse();
     this.scene.add(this.powerhouse.group);
     for (const br of this.barrels) {
@@ -994,6 +1008,55 @@ export class DamSim {
       t.prog = 0;
       t.group.rotation.x = 0;
       t.group.rotation.z = 0;
+    }
+
+    // instanced town: restore districts, city trees and rubble to rest state
+    {
+      const eu2 = new THREE.Euler();
+      const q2 = new THREE.Quaternion();
+      const m42 = new THREE.Matrix4();
+      const col2 = new THREE.Color();
+      for (const d of this.townDistricts) {
+        for (let i = 0; i < d.spots.length; i++) {
+          const sp = d.spots[i];
+          eu2.set(0, sp.rot, 0);
+          q2.setFromEuler(eu2);
+          m42.compose(new THREE.Vector3(sp.x, sp.ground + sp.h / 2 - 0.12, sp.z), q2, new THREE.Vector3(sp.w, sp.h, sp.d));
+          d.mesh.setMatrixAt(i, m42);
+          d.mesh.setColorAt(i, col2.setHex(d.tints[i]));
+          if (d.roofMesh && d.roofOf[i] >= 0) {
+            m42.compose(new THREE.Vector3(sp.x, sp.ground + sp.h + 0.06, sp.z), q2.identity(), new THREE.Vector3(sp.w + 0.35, 0.16, sp.d + 0.35));
+            d.roofMesh.setMatrixAt(d.roofOf[i], m42);
+          }
+        }
+        d.dmg.fill(0);
+        d.mesh.instanceMatrix.needsUpdate = true;
+        if (d.mesh.instanceColor) d.mesh.instanceColor.needsUpdate = true;
+        if (d.roofMesh) d.roofMesh.instanceMatrix.needsUpdate = true;
+      }
+      const tt = this.townTrees;
+      if (tt) {
+        tt.prog.fill(0);
+        tt.drift.fill(0);
+        for (let i = 0; i < tt.spots.length; i++) {
+          const sp = tt.spots[i];
+          m42.makeTranslation(sp.x, sp.ground + 0.95 * sp.s, sp.z);
+          tt.trunk.setMatrixAt(i, m42);
+          eu2.set(0, sp.rot, 0);
+          q2.setFromEuler(eu2);
+          m42.compose(new THREE.Vector3(sp.x, sp.ground + 2.5 * sp.s, sp.z), q2, new THREE.Vector3(sp.s, sp.s * 1.3, sp.s));
+          tt.fol.setMatrixAt(i, m42);
+        }
+        tt.trunk.instanceMatrix.needsUpdate = true;
+        tt.fol.instanceMatrix.needsUpdate = true;
+      }
+      const rb = this.townRubble;
+      if (rb) {
+        rb.prog.fill(0);
+        m42.makeScale(0, 0, 0);
+        for (let i = 0; i < rb.spots.length; i++) rb.mesh.setMatrixAt(i, m42);
+        rb.mesh.instanceMatrix.needsUpdate = true;
+      }
     }
     for (const f of this.floaters) {
       f.pos.copy(f.home);
@@ -1336,6 +1399,9 @@ export class DamSim {
       }
     }
 
+    // instanced town: buildings crumble, city trees uproot, rubble surfaces
+    this.updateTownDestruction(dt);
+
     for (const c of this.chunks) {
       if (!c.active) continue;
       c.vel.y -= 11 * dt;
@@ -1384,6 +1450,122 @@ export class DamSim {
       }
     }
   }
+
+  // ============================================================ town destruction
+  // The instanced city reacts to the same simulated flow that drives the
+  // props: buildings crumble toward the current and char, roofs settle,
+  // city trees uproot and wash downstream, and flood rubble surfaces along
+  // the wave's path — visual layer only, purely depth/velocity driven.
+  private updateTownDestruction(dt: number): void {
+    const f = this.field;
+    const s = this.sample;
+    const m4 = this.tvM, q = this.tvQ, eu = this.tvE, pos = this.tvP, scl = this.tvS, off = this.tvO, col = this.tvC;
+    const charred = this.charredColor;
+
+    // ---- instanced district buildings: collapse toward the flow
+    for (const d of this.townDistricts) {
+      let any = false;
+      let tintDirty = false;
+      for (let i = 0; i < d.spots.length; i++) {
+        if (d.dmg[i] >= 1) continue;
+        const sp = d.spots[i];
+        f.sample(sp.x, sp.z, s);
+        const wd = s.eta - sp.ground;
+        const spd = Math.sqrt(s.u * s.u + s.v * s.v);
+        if (wd > 0.65 && (spd > 1.1 || wd > 2.5)) {
+          d.dmg[i] = Math.min(1, d.dmg[i] + dt * 0.5);
+          const p = d.dmg[i];
+          const dir = Math.atan2(s.v, s.u);
+          const h = sp.h * (1 - p * 0.58);
+          eu.set(-Math.cos(dir) * p * 1.05, sp.rot + Math.sin(dir) * p * 0.3, Math.sin(dir) * p * 1.05);
+          q.setFromEuler(eu);
+          pos.set(sp.x + s.u * dt * 0.3 * p, sp.ground + h / 2 - 0.12 - p * 0.42, sp.z + s.v * dt * 0.3 * p);
+          scl.set(sp.w * (1 + p * 0.18), h, sp.d * (1 + p * 0.18));
+          m4.compose(pos, q, scl);
+          d.mesh.setMatrixAt(i, m4);
+          d.mesh.setColorAt(i, col.setHex(d.tints[i]).lerp(charred, p * 0.8));
+          any = true;
+          tintDirty = true;
+          if (d.roofMesh && d.roofOf[i] >= 0) {
+            pos.set(sp.x + s.u * dt * 0.3 * p, sp.ground + h + 0.06 - p * 0.5, sp.z + s.v * dt * 0.3 * p);
+            q.identity();
+            scl.set(sp.w + 0.35, 0.16, sp.d + 0.35);
+            m4.compose(pos, q, scl);
+            d.roofMesh.setMatrixAt(d.roofOf[i], m4);
+            d.roofMesh.instanceMatrix.needsUpdate = true;
+          }
+        }
+      }
+      if (any) d.mesh.instanceMatrix.needsUpdate = true;
+      if (tintDirty && d.mesh.instanceColor) d.mesh.instanceColor.needsUpdate = true;
+    }
+
+    // ---- instanced city trees: uproot, tilt with the current, wash away
+    const tt = this.townTrees;
+    if (tt) {
+      let any = false;
+      for (let i = 0; i < tt.spots.length; i++) {
+        if (tt.prog[i] >= 1) continue;
+        const sp = tt.spots[i];
+        f.sample(sp.x, sp.z, s);
+        const wd = s.eta - sp.ground;
+        if (wd > 0.7) {
+          tt.prog[i] = Math.min(1, tt.prog[i] + dt * 0.7);
+          const p = tt.prog[i];
+          const dir = Math.atan2(s.v, s.u);
+          tt.drift[i * 2] += s.u * dt * 0.3 * p;
+          tt.drift[i * 2 + 1] += s.v * dt * 0.3 * p;
+          const dx = tt.drift[i * 2];
+          const dz = tt.drift[i * 2 + 1];
+          eu.set(-Math.cos(dir) * p * 1.3, sp.rot, Math.sin(dir) * p * 1.3);
+          q.setFromEuler(eu);
+          off.set(0, 0.95 * sp.s, 0).applyQuaternion(q);
+          pos.set(sp.x + dx + off.x, sp.ground + off.y, sp.z + dz + off.z);
+          scl.set(1, 1, 1);
+          m4.compose(pos, q, scl);
+          tt.trunk.setMatrixAt(i, m4);
+          off.set(0, 2.5 * sp.s, 0).applyQuaternion(q);
+          pos.set(sp.x + dx + off.x, sp.ground + off.y, sp.z + dz + off.z);
+          scl.set(sp.s, sp.s * 1.3, sp.s);
+          m4.compose(pos, q, scl);
+          tt.fol.setMatrixAt(i, m4);
+          any = true;
+        }
+      }
+      if (any) {
+        tt.trunk.instanceMatrix.needsUpdate = true;
+        tt.fol.instanceMatrix.needsUpdate = true;
+      }
+    }
+
+    // ---- flood rubble: pieces surface as the destructive wave reaches them
+    const rb = this.townRubble;
+    if (rb) {
+      let any = false;
+      for (let i = 0; i < rb.spots.length; i++) {
+        if (rb.prog[i] >= 1) continue;
+        const sp = rb.spots[i];
+        f.sample(sp.x, sp.z, s);
+        const wd = s.eta - sp.ground;
+        const spd = Math.sqrt(s.u * s.u + s.v * s.v);
+        if (wd > 0.55 && (spd > 1.2 || wd > 2.2)) {
+          rb.prog[i] = Math.min(1, rb.prog[i] + dt * (1.4 + Math.min(spd * 0.22, 1.5)));
+          const p = rb.prog[i];
+          const e = p * p * (3 - 2 * p);
+          m4.fromArray(rb.mats, i * 16);
+          m4.decompose(pos, q, scl);
+          scl.multiplyScalar(e);
+          pos.y += Math.sin(p * Math.PI) * 0.55;
+          m4.compose(pos, q, scl);
+          rb.mesh.setMatrixAt(i, m4);
+          any = true;
+        }
+      }
+      if (any) rb.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  private charredColor = new THREE.Color(0x453f39);
 
   // ============================================================ IoT sensor markers
   // 3D representation of the ESP32 sensor network: floating buoys for reservoir

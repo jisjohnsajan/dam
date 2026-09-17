@@ -715,3 +715,21 @@ Stage Summary:
 - The site now truly shows the square-canvas DAMSAFE world (previous invisibility was the truncated world.ts — the module never parsed, so nothing could mount).
 - Part 5 of the world build is complete: farmland, civic landmarks and the far-terrain ring close the square canvas and the horizon.
 - Key files: src/lib/dam/world.ts (completed), tsconfig.json (excludes), verified via scripts/verify_world_overview.png, verify_flood_top.png, verify_flood_impact.png, verify_final_overview.png.
+
+---
+Task ID: destruction-along-flow + green-reduction
+Agent: Super Z (main agent)
+Task: User request — (1) place visible destruction along the water flow path (collapsed houses, debris); (2) remove/reduce the dominant green parts of the map (surrounding mountains).
+
+Work Log:
+- Found the gap: engine.ts only added buildTown().group — the returned districts/floodTrees were discarded, so the instanced city NEVER showed damage (only the few props.ts houses collapsed).
+- world.ts: added RubbleField interface + rubble builder inside buildTown — ~2 broken-slab instances per district building + 260 corridor streaks along the channel banks/stilling basin/floodplain (the wave's path); instances hidden at zero-scale at rest, each with a stored rest matrix; returned as tw.rubble. Extended FloodTrees with a drift array (accumulated downstream wash). Thinned rim-forest belt density (skip 0.4→0.68 in-rim).
+- world.ts buildFarTerrain: ring lowered from 20-53 m to 9-21 m rolling hills; aprons pulled in (420→340 east, 265→210 N/S, 260→200 west); colours muted 45% toward hazy sage-grey so the backdrop reads as distance, not a second green mountain world. (In-canvas rims untouched — they are solver terrain, bedAt is READ-ONLY.)
+- engine.ts: stored tw.districts/floodTrees/rubble on the engine; new updateTownDestruction(dt) called from updateProps — buildings collapse toward the flow direction (tip + sink 58% + char to 0x453f39, roofs settle) when depth>0.65 m and (velocity>1.1 m/s or depth>2.5 m); city trees uproot, tilt with the current and wash downstream (drift accumulates with velocity); rubble pieces surface with a settle-hop when depth>0.55 m and (velocity>1.2 or depth>2.2), latching visible after the flood recedes. All driven purely by the CPU FlowField readback of the GPU solver state — no fake animation.
+- resetSim: new block restores district matrices/tints, roof matrices, tree matrices + drift, and re-hides rubble, so Reset returns the town to pristine state.
+- Verified: tsc clean, production build clean; browser run at 8x — flood wave carries collapsed buildings/rubble/fallen trees visible in Town view; far backdrop now low + muted (canvas owns the view); Reset restores everything; zero page errors. Screenshots: scripts/verify2_overview.png, verify2_destruction_top.png, verify2_destruction_town.png, verify2_reset.png.
+
+Stage Summary:
+- Destruction now travels WITH the water: buildings crumble and char in the flow, trees wash downstream, wreckage persists along the flood path after the wave passes; Reset restores all.
+- The map's green surround is reduced to a low hazy backdrop; the square canvas (dam top-left, river, city, farms) dominates the frame.
+- Key files: src/lib/dam/world.ts, src/lib/dam/engine.ts.

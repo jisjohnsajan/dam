@@ -719,9 +719,20 @@ export interface FloodTrees {
   fol: THREE.InstancedMesh;
   spots: { x: number; z: number; ground: number; s: number; rot: number }[];
   prog: Float32Array; // 0 standing → 1 fallen (engine-driven)
+  drift: Float32Array; // accumulated downstream wash, x/z per tree
 }
 
-export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; floodTrees: FloodTrees } {
+// flood wreckage (broken slabs, timbers) scattered along the wave's path —
+// hidden at rest, the engine surfaces each piece when the destructive flow
+// (depth + velocity) reaches its spot, and it stays after the water recedes
+export interface RubbleField {
+  mesh: THREE.InstancedMesh;
+  spots: { x: number; z: number; ground: number }[];
+  mats: Float32Array; // final rest matrix per instance (16 floats each)
+  prog: Float32Array; // 0 hidden → 1 settled (engine-driven)
+}
+
+export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; floodTrees: FloodTrees; rubble: RubbleField } {
   const group = new THREE.Group();
   const asphalt = new THREE.MeshStandardMaterial({ color: 0x45454a, roughness: 0.95 });
   const paving = new THREE.MeshStandardMaterial({ color: 0x9b968c, roughness: 0.95 });
@@ -864,6 +875,58 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   buildClass(spotsM, midMat, tones, true);
   buildClass(spotsH, glassMat, glassTones, false);
 
+  // ---- flood rubble along the wave's path ---------------------------------
+  // broken slabs, wall chunks and timbers beside every building + streaked
+  // along the low-ground corridor the destructive wave travels. Hidden at
+  // rest; the engine surfaces each piece as depth + velocity arrive.
+  const rubbleSpots: { x: number; z: number; ground: number }[] = [];
+  const rubbleElems: number[] = [];
+  const pushRubble = (x: number, z: number, ground: number, big: number): void => {
+    const sx = (0.7 + hashRnd(x * 5.3 + z) * 1.5) * big;
+    const sy = (0.22 + hashRnd(x + z * 3.1) * 0.42) * big;
+    const sz = (0.5 + hashRnd(x * 2.9 + z * 1.7) * 1.1) * big;
+    const yaw = hashRnd(x * 9.7 + z * 4.3) * Math.PI;
+    const tilt = 0.25 + hashRnd(x * 6.1 + z * 8.9) * 0.85;
+    eu.set((hashRnd(x * 4.7 + z * 2.3) * 2 - 1) * tilt, yaw, (hashRnd(x * 8.3 + z * 5.9) * 2 - 1) * tilt);
+    q.setFromEuler(eu);
+    m4.compose(new THREE.Vector3(x, ground + sy * 0.5 + 0.1, z), q, new THREE.Vector3(sx, sy, sz));
+    rubbleElems.push(...m4.elements);
+    rubbleSpots.push({ x, z, ground });
+  };
+  for (const sp of [...spotsL, ...spotsM, ...spotsH]) {
+    pushRubble(sp.x + 1.1 + hashRnd(sp.x + sp.z), sp.z + 0.9 + hashRnd(sp.z * 2 + sp.x), sp.ground, sp.h > 8 ? 1.5 : 1);
+    pushRubble(sp.x - 1.0 + hashRnd(sp.x * 2 + sp.z), sp.z - 1.2 + hashRnd(sp.x + sp.z * 3), sp.ground, sp.h > 8 ? 1.3 : 0.9);
+  }
+  // corridor streaks: the wave picks up wreckage along the channel banks,
+  // stilling basin and floodplain on its way through the city
+  for (let k = 0; k < 260; k++) {
+    const x = 46 + hashRnd(k * 17.7) * 106;
+    const z = axisAt(x) + (hashRnd(k * 7.3) - 0.5) * 46;
+    const g = bedAt(x, z);
+    if (g < 2.8 || g > 9.5) continue;
+    pushRubble(x + (hashRnd(k * 3.1) - 0.5) * 3, z + (hashRnd(k * 11.9) - 0.5) * 3, g, 0.8 + hashRnd(k * 5.7) * 0.9);
+  }
+  const rubbleMesh = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 }),
+    Math.max(rubbleSpots.length, 1),
+  );
+  const rubbleTints = [0x8d857a, 0x7a6a58, 0x6e4f3a, 0x9a9186, 0x5d554a];
+  const zeroM = new THREE.Matrix4().makeScale(0, 0, 0);
+  rubbleSpots.forEach((sp, i) => {
+    rubbleMesh.setMatrixAt(i, zeroM);
+    rubbleMesh.setColorAt(i, col.setHex(rubbleTints[Math.floor(hashRnd(sp.x * 3.3 + sp.z) * rubbleTints.length)]));
+  });
+  rubbleMesh.castShadow = true;
+  rubbleMesh.frustumCulled = false;
+  const rubble: RubbleField = {
+    mesh: rubbleMesh,
+    spots: rubbleSpots,
+    mats: new Float32Array(rubbleElems),
+    prog: new Float32Array(rubbleSpots.length),
+  };
+  group.add(rubbleMesh);
+
   // ---- landmark skyline towers (glass shafts + crowns + aviation beacons)
   const beaconMat = new THREE.MeshStandardMaterial({ color: 0xff5540, emissive: 0xcc2200, emissiveIntensity: 1.4, roughness: 0.4 });
   for (const [tx, tz, th, gi] of [
@@ -955,7 +1018,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
         const slope = Math.abs(bedAt(x + 2, z) - g) + Math.abs(bedAt(x, z + 2) - g);
         if (slope > 2.2) continue;
         const h = hashRnd(x * 12.7 + z * 5.3);
-        if (h < (inRim ? 0.4 : 0.55)) continue;
+        if (h < (inRim ? 0.68 : 0.58)) continue;
         treeSpots.push({ x: x + (hashRnd(x + z) - 0.5) * 1.8, z: z + (hashRnd(x * 2 + z) - 0.5) * 1.8, s: 1.15 + h * 0.9 });
       }
     }
@@ -983,7 +1046,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     fols.castShadow = true;
     if (fols.instanceColor) fols.instanceColor.needsUpdate = true;
     group.add(trunks, fols);
-    var floodTrees: FloodTrees = { trunk: trunks, fol: fols, spots: fSpots, prog: new Float32Array(fSpots.length) };
+    var floodTrees: FloodTrees = { trunk: trunks, fol: fols, spots: fSpots, prog: new Float32Array(fSpots.length), drift: new Float32Array(fSpots.length * 2) };
   }
 
   // ---- landmarks
@@ -1414,7 +1477,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     }
   }
 
-  return { group, districts, floodTrees };
+  return { group, districts, floodTrees, rubble };
 }
 
 // ============================================================ FAR TERRAIN
@@ -1432,10 +1495,11 @@ export function buildFarTerrain(): { group: THREE.Group } {
     return t * t * (3 - 2 * t);
   };
 
-  // distant range: rolling, forested, no craggy peaks (matches the rim look)
+  // distant backdrop: LOW rolling hills — kept subtle so the square canvas
+  // (dam, river, city, farms) owns the view instead of a wall of green
   const ringH = (x: number, z: number): number =>
-    20 + 26 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
-       + 7 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
+    9 + 9 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
+     + 3 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
 
   const farH = (x: number, z: number): number => {
     // east corridor: bedAt stays well-behaved east of the canvas, so the
@@ -1445,7 +1509,7 @@ export function buildFarTerrain(): { group: THREE.Group } {
     if (x > LX && Math.abs(dzo) < 46) {
       const valley = bedAt(x, z);
       const t = Math.max(sstep(175, 255, x), sstep(34, 46, Math.abs(dzo)));
-      return valley + (ringH(x, z) + 6 - valley) * t;
+      return valley + (ringH(x, z) + 2 - valley) * t;
     }
     // everywhere else: hold the boundary profile, fade into the range
     const dOut = Math.max(-x, x - LX, -LZ / 2 - z, z - LZ / 2, 0);
@@ -1473,6 +1537,13 @@ export function buildFarTerrain(): { group: THREE.Group } {
       const sx = (farH(x + e, z) - farH(x - e, z)) / (2 * e);
       const sz = (farH(x, z + e) - farH(x, z - e)) / (2 * e);
       terrainColor(x, z, y, Math.sqrt(sx * sx + sz * sz), tc);
+      // mute toward hazy sage-grey: the backdrop reads as distance,
+      // not a second green mountain world competing with the valley
+      const gr = (tc.r + tc.g + tc.b) / 3;
+      const mu = 0.45;
+      tc.r = tc.r * (1 - mu) + (gr * 0.78 + 0.13) * mu;
+      tc.g = tc.g * (1 - mu) + (gr * 0.86 + 0.15) * mu;
+      tc.b = tc.b * (1 - mu) + (gr * 0.84 + 0.17) * mu;
       col.setRGB(tc.r, tc.g, tc.b, THREE.SRGBColorSpace);
       colors[i * 3] = col.r;
       colors[i * 3 + 1] = col.g;
@@ -1485,10 +1556,10 @@ export function buildFarTerrain(): { group: THREE.Group } {
 
   // four aprons framing the canvas: north / south rims, west headwall, east
   // valley continuation (the east strip carries the river out of frame)
-  strip(-260, 420, -265, -LZ / 2, 150, 40);
-  strip(-260, 420, LZ / 2, 265, 150, 40);
-  strip(-260, 0, -LZ / 2, LZ / 2, 56, 72);
-  strip(LX, 420, -LZ / 2, LZ / 2, 60, 72);
+  strip(-200, 340, -210, -LZ / 2, 128, 30);
+  strip(-200, 340, LZ / 2, 210, 128, 30);
+  strip(-200, 0, -LZ / 2, LZ / 2, 46, 64);
+  strip(LX, 340, -LZ / 2, LZ / 2, 50, 64);
 
   // haze backstop far below the terrain so no sky peeks under the outer ranges
   const back = new THREE.Mesh(
