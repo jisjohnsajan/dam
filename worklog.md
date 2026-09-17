@@ -514,3 +514,22 @@ Stage Summary:
 - Next candidates: GLB/GLTF reference-model loader (user offered real 3D
   assets — drop into public/models + loader prop), town flood-damage states
   for instanced buildings, Phase 2 cascade dams.
+
+---
+Task ID: W1
+Agent: Super Z (main)
+Task: Restyle the DAMSAFE world to match the user's reference image — towering mountain amphitheater enclosing the valley, dense ring-shaped city with highway interchanges, turquoise reservoir.
+
+Work Log:
+- terrain.ts: downstream valley widened (widen 0.34 → 0.44) for the ring city; canyon walls steepened/two-stage (min(t*1.02, 24.5) + (t-24)*0.55) so in-domain cliffs climb toward the far ring; scrub band extended to b≤50; base rock darkened to warm granite (0.325/0.29/0.246 + n + strata); new high-rock band smoothstep(26,60,b) with large strata banding (0.265/0.248/0.226 + band*0.058) — kills the "snow field" blow-out.
+- glsl.ts: reservoir tint turquoise — shallow (0.052,0.402,0.512), deep (0.006,0.145,0.308), in-scatter teal-shift.
+- world.ts far terrain: farBed rewritten as a 4-side amphitheater — north wall towers (rise ≤130 m, peaks to ~260 m), upstream headwall hugs the lake, south rim capped at 55 m so the default aerial camera sees into the bowl, downstream valley runs 40 m before the east wall; ridgeN ridged multifractal at 0.02 freq (kept below mesh sampling rate — fixes triangular-spike aliasing from the first attempt); patches enlarged to E=260 with 60x100 / 78x64 segments.
+- world.ts ring city: TOWN_C (146,0); 3 ring boulevards (r 21/31.5/42) drawn with profileRibbon arched over the river channel (deck = bed(x,0)+3.6..4.75) + deckPiers — reads as 3 bridges; 6 radial avenues; riverside promenades; buildExpressway — EXP_A bank highway + EXP_B river-crossing signature highway at ~5.5 m on pylons (skipped over channel), edge beams, instanced centre dashes, 4 down-ramps + RAMP_AB flyover connector (spaghetti-junction read); building scatter rewritten — 3-class instanced districts (low 2.8-6.2 m / mid-rise 6.8-13 m / glass towers 13.5-23 m clustered downtown via core weight), ~2× density of the old grid; 5 landmark towers (24/21/18/19/16 m) with crowns + red aviation beacons; ~300 instanced city trees (promenade rows + block gaps) with per-instance greens; streetlights extended to ring boulevards; CLEAR_SEGS/CLEAR_RECTS clearance network keeps buildings off all paths/landmarks/farms/sheds.
+- engine.ts: default camera (238,132,146) + overview preset (256,148,72)→(94,8,0), top 245 m, town/impact retuned; fog 470/2300 day (storm 250/1150); maxDistance 980; shadow frustum ±120/far 1150; sky turbidity 4.6, rayleigh 2.2; lighting regraded — sun 0xffd9a8 @2.35 flipped to camera side (0.46,0.6,0.3) so near slopes read warm granite while shadows go cool (hemi 0.32, env 0.22) — fixes the icy-white mountain look (albedo tweaks alone couldn't beat ACES).
+- Verified: tsc + eslint clean (src); browser screenshots overview/town/dam-face; scenario run (structural breach drive) + openGates physics correct (no spill below sill 22.8); reset OK; zero console errors.
+- Known notes: breach formation is wall-clock slow in the throttled headless browser (unchanged from previous session); flood physics untouched — widen only moves dry walls outward, gauges/channel intact.
+
+Stage Summary:
+- Deliverable: world now matches the reference — turquoise reservoir hugged by a jagged peak amphitheater, dam + powerhouse at the valley head, and a dense open-world ring city (boulevards, arched river bridges, elevated interchange, glass skyline, trees) filling the valley floor.
+- Key files: src/lib/dam/terrain.ts, src/lib/dam/glsl.ts, src/lib/dam/world.ts, src/lib/dam/engine.ts.
+- Next candidates: flood-damage states for instanced buildings, GLB reference-model loader, Phase 2 cascade dams.

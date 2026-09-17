@@ -492,12 +492,12 @@ void main() {
   // Kept luminous (real reservoirs read as saturated blue-green, never black):
   // at typical viewing angles the old ramp crushed 8 m of depth to near-black
   // and the lake looked like a dry slate plateau.
-  vec3 shallow = vec3(0.075, 0.330, 0.545);
-  vec3 deep    = vec3(0.012, 0.115, 0.290);
+  vec3 shallow = vec3(0.052, 0.402, 0.512); // turquoise glacial tint
+  vec3 deep    = vec3(0.006, 0.145, 0.308);
   float absorb = pow(clamp(depth / 11.0, 0.0, 1.0), 0.62);
   vec3 body = mix(shallow, deep, absorb);
   // in-scattered sky ambient keeps depth-coloured water luminous
-  body += vec3(0.045, 0.10, 0.17) * (1.0 - absorb) * (1.0 - 0.5 * uRain);
+  body += vec3(0.040, 0.125, 0.155) * (1.0 - absorb) * (1.0 - 0.5 * uRain);
 
   // foam + shoreline whiteness
   float foam = texture2D(uFoam, vUvw).r;

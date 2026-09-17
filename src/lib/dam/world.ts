@@ -380,19 +380,199 @@ const TOWN_STREETS: StreetSeg[] = [
   { pts: [[153, -17.4], [160, -17.8], [168, -18.4], [176, -19.2]], w: 2.4 },
 ];
 
-function distToStreets(x: number, z: number): number {
+// ---- ring-city layout (open-world district wrapped around the valley floor)
+const TOWN_C: [number, number] = [146, 0]; // ring centre on the river axis
+const RINGS: { r: number; w: number }[] = [
+  { r: 21, w: 3.4 },
+  { r: 31.5, w: 3.2 },
+  { r: 42, w: 3.0 },
+];
+const RING_HALF = 1.72; // rad — downstream-facing arcs around the valley
+const RADIAL_ANGLES = [0.72, 1.18, 1.55]; // rad, mirrored per bank
+
+function arcPts(r: number, half: number, n: number): [number, number][] {
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= n; i++) {
+    const a = -half + (2 * half * i) / n;
+    pts.push([TOWN_C[0] + r * Math.cos(a), TOWN_C[1] + r * Math.sin(a)]);
+  }
+  return pts;
+}
+function rayPts(a: number, r0: number, r1: number, n: number): [number, number][] {
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= n; i++) {
+    const r = r0 + ((r1 - r0) * i) / n;
+    pts.push([TOWN_C[0] + r * Math.cos(a), TOWN_C[1] + r * Math.sin(a)]);
+  }
+  return pts;
+}
+
+// clearance network: every street / expressway segment buildings must dodge
+interface ClearSeg { ax: number; az: number; bx: number; bz: number }
+const CLEAR_SEGS: ClearSeg[] = [];
+function pushClear(pts: [number, number][]): void {
+  for (let i = 0; i < pts.length - 1; i++)
+    CLEAR_SEGS.push({ ax: pts[i][0], az: pts[i][1], bx: pts[i + 1][0], bz: pts[i + 1][1] });
+}
+
+const RING_PTS: [number, number][][] = RINGS.map((rg) => arcPts(rg.r, RING_HALF, 30));
+for (const st of TOWN_STREETS) pushClear(st.pts);
+for (const pts of RING_PTS) pushClear(pts);
+const RADIAL_PTS: [number, number][][] = [];
+for (const a of RADIAL_ANGLES)
+  for (const s of [1, -1]) {
+    const pts = rayPts(a * s, 19.5, 43.5, 8);
+    RADIAL_PTS.push(pts);
+    pushClear(pts);
+  }
+
+// elevated expressway + interchange (the reference map's spaghetti junction)
+const EXP_A: [number, number][] = [[116, 29], [126, 27.5], [138, 26], [150, 25], [162, 24.5], [174, 25], [186, 26.5]];
+const EXP_B: [number, number][] = [[168, 31.5], [161, 22], [155.5, 10], [153, -1], [154.5, -13], [160, -23], [166, -31.5]];
+const RAMP_A1: [number, number][] = [[174, 25], [178.5, 29], [181.5, 33], [182.5, 36.5]];
+const RAMP_A2: [number, number][] = [[116, 29], [112.5, 32.5], [111, 36]];
+const RAMP_B1: [number, number][] = [[166, -31.5], [170.5, -35], [173.5, -38.5]];
+const RAMP_AB: [number, number][] = [[161, 24.6], [164, 27.6], [167.2, 30.9]];
+pushClear(EXP_A);
+pushClear(EXP_B);
+pushClear(RAMP_A1);
+pushClear(RAMP_A2);
+pushClear(RAMP_B1);
+pushClear(RAMP_AB);
+
+function distToPaths(x: number, z: number): number {
   let best = 1e9;
-  for (const st of TOWN_STREETS) {
-    for (let i = 0; i < st.pts.length - 1; i++) {
-      const [ax, az] = st.pts[i];
-      const [bx, bz] = st.pts[i + 1];
-      const dx = bx - ax, dz = bz - az;
-      const t = clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1);
-      const d = Math.hypot(x - (ax + dx * t), z - (az + dz * t));
-      best = Math.min(best, d);
-    }
+  for (const s of CLEAR_SEGS) {
+    const dx = s.bx - s.ax, dz = s.bz - s.az;
+    const t = clamp(((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const d = Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t));
+    if (d < best) best = d;
   }
   return best;
+}
+
+// landmark / kept-site clearance rectangles (cx, cz, w, d)
+const CLEAR_RECTS: [number, number, number, number][] = [
+  [166, 27.5, 12, 12], [160.5, 26.5, 10, 7], [172, 35.5, 21, 14], // plaza+clock, market, pitch
+  [176, -30, 6, 6], [154, -34, 8, 6], [158, 36, 8, 8], // water tower, temple, park grove
+  [178, -38, 14, 9], [183, -30, 10, 12], [176, 39, 13, 8], [185, 32, 9, 10], [186, -20, 8, 10], // farms
+  [127.5, 27.5, 7, 6], [135, 29.5, 8, 6], [143, 28.5, 6, 6], // industry sheds
+  [159, 17, 7, 7], [172, -18.5, 7, 7], [183, 33, 7, 7], [150, -24, 7, 7], [186, -36, 7, 7], // landmark towers
+];
+function clearOfSites(x: number, z: number, m = 1.4): boolean {
+  for (const [cx, cz, w, d] of CLEAR_RECTS)
+    if (Math.abs(x - cx) < w / 2 + m && Math.abs(z - cz) < d / 2 + m) return false;
+  return true;
+}
+
+// deck ribbon following an arbitrary elevation profile; returns the sampled
+// centreline so callers can hang piers / dashes off it
+function profileRibbon(
+  group: THREE.Group, pts: [number, number][], w: number, mat: THREE.Material,
+  yAt: (x: number, z: number, t: number) => number,
+  castShadow = true,
+): { x: number; z: number; y: number }[] {
+  const n = Math.max(10, pts.length * 5);
+  const P: { x: number; z: number; y: number }[] = [];
+  for (let k = 0; k <= n; k++) {
+    const t = k / n;
+    const seg = Math.min(Math.floor(t * (pts.length - 1)), pts.length - 2);
+    const lt = t * (pts.length - 1) - seg;
+    const x = pts[seg][0] + (pts[seg + 1][0] - pts[seg][0]) * lt;
+    const z = pts[seg][1] + (pts[seg + 1][1] - pts[seg][1]) * lt;
+    P.push({ x, z, y: yAt(x, z, t) });
+  }
+  // smooth the elevation profile (endpoints pinned)
+  for (let p = 0; p < 4; p++)
+    for (let i = 1; i < P.length - 1; i++)
+      P[i].y = (P[i - 1].y + 2 * P[i].y + P[i + 1].y) / 4;
+  const pos: number[] = [];
+  const idx: number[] = [];
+  for (let i = 0; i < P.length; i++) {
+    const a = P[Math.max(i - 1, 0)];
+    const b = P[Math.min(i + 1, P.length - 1)];
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const dl = Math.hypot(dx, dz) || 1;
+    const nx = (-dz / dl) * w * 0.5, nz = (dx / dl) * w * 0.5;
+    pos.push(P[i].x - nx, P[i].y, P[i].z - nz, P[i].x + nx, P[i].y, P[i].z + nz);
+    if (i > 0) {
+      const q = (i - 1) * 2;
+      idx.push(q, q + 2, q + 1, q + 1, q + 2, q + 3);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = castShadow;
+  mesh.receiveShadow = true;
+  group.add(mesh);
+  return P;
+}
+
+function deckPiers(
+  group: THREE.Group, P: { x: number; z: number; y: number }[],
+  r: number, mat: THREE.Material, minH = 1.4,
+): void {
+  for (let i = 3; i < P.length - 2; i += 4) {
+    const g = bedAt(P[i].x, P[i].z);
+    const hh = P[i].y - g;
+    if (hh < minH) continue;
+    const pier = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.78, r, hh - 0.12, 8), mat);
+    pier.position.set(P[i].x, g + (hh - 0.12) / 2, P[i].z);
+    pier.castShadow = true;
+    group.add(pier);
+  }
+}
+
+// elevated expressway: deck on pylons following ground + hAbove, edge beams,
+// centre dashes, plus sloped ramps down to street level
+function buildExpressway(group: THREE.Group): void {
+  const deckMat = new THREE.MeshStandardMaterial({ color: 0x58585e, roughness: 0.88, metalness: 0.04, side: THREE.DoubleSide });
+  const beamMat = matConcreteDark();
+  const lineMat = new THREE.MeshStandardMaterial({ color: 0xd8d2b8, roughness: 0.8 });
+
+  const road = (pts: [number, number][], h0: number, h1: number, w: number): void => {
+    const P = profileRibbon(group, pts, w, deckMat, (x, z, t) => bedAt(x, z) + h0 + (h1 - h0) * t);
+    // edge beams slightly under the deck
+    profileRibbon(group, pts, w + 0.7, beamMat, (x, z, t) => bedAt(x, z) + h0 + (h1 - h0) * t - 0.16, false);
+    // pylons where the deck is well above ground (never in the river channel)
+    for (let i = 3; i < P.length - 2; i += 4) {
+      const g = bedAt(P[i].x, P[i].z);
+      const hh = P[i].y - g;
+      if (hh < 1.8 || Math.abs(P[i].z) < 13) continue;
+      const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.72, hh - 0.1, 0.72), beamMat);
+      pylon.position.set(P[i].x, g + (hh - 0.1) / 2, P[i].z);
+      pylon.castShadow = true;
+      group.add(pylon);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, 0.3, 1.0), beamMat);
+      cap.position.set(P[i].x, P[i].y - 0.3, P[i].z);
+      group.add(cap);
+    }
+    // centre dashes (instanced)
+    const dashT: THREE.Matrix4[] = [];
+    for (let i = 2; i < P.length - 2; i += 3) {
+      const a = P[i], b = P[i + 1];
+      const yaw = Math.atan2(b.x - a.x, b.z - a.z);
+      const mm = new THREE.Matrix4();
+      mm.makeRotationY(yaw);
+      mm.setPosition(a.x, a.y + 0.04, a.z);
+      dashT.push(mm);
+    }
+    if (dashT.length) {
+      const dashMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.04, 1.7), lineMat, dashT.length);
+      dashT.forEach((mm, i) => dashMesh.setMatrixAt(i, mm));
+      group.add(dashMesh);
+    }
+  };
+
+  road(EXP_A, 5.6, 5.6, 5.0);   // +z bank elevated highway
+  road(EXP_B, 5.2, 5.2, 5.0);   // signature river-crossing elevated highway
+  road(RAMP_A1, 5.6, 0.16, 3.6); // down-ramp to the outer ring
+  road(RAMP_A2, 5.6, 0.16, 3.6); // down-ramp near the dam bench
+  road(RAMP_B1, 5.2, 0.16, 3.6); // down-ramp on the left bank
+  road(RAMP_AB, 5.6, 5.2, 3.6);  // flyover connector A → B
 }
 
 function flatRibbon(group: THREE.Group, pts: [number, number][], w: number, mat: THREE.Material, lift = 0.14): void {
@@ -435,6 +615,23 @@ function makeBuildingTex(): THREE.Texture {
         const lit = hashRnd(rx * 7 + ry * 13) > 0.55;
         c.fillStyle = lit ? 'rgba(255, 214, 140, 0.92)' : 'rgba(38, 52, 60, 0.85)';
         c.fillRect(10 + rx * 30, 12 + ry * 30, 17, 19);
+      }
+    }
+  });
+}
+
+// mid-rise / glass-tower facades (8 window rows)
+function makeTowerTex(glass: boolean): THREE.Texture {
+  return canvasTex(128, 192, (c) => {
+    c.fillStyle = glass ? '#aebcc6' : '#f0ede4';
+    c.fillRect(0, 0, 128, 192);
+    for (let ry = 0; ry < 8; ry++) {
+      for (let rx = 0; rx < 4; rx++) {
+        const lit = hashRnd(rx * 11 + ry * 29 + (glass ? 5.3 : 0)) > (glass ? 0.72 : 0.58);
+        c.fillStyle = glass
+          ? lit ? 'rgba(255, 232, 175, 0.95)' : 'rgba(54, 88, 112, 0.92)'
+          : lit ? 'rgba(255, 214, 140, 0.92)' : 'rgba(40, 54, 64, 0.85)';
+        c.fillRect(9 + rx * 30, 9 + ry * 23, 21, 14);
       }
     }
   });
@@ -512,71 +709,170 @@ export function buildTown(): { group: THREE.Group } {
   const asphalt = new THREE.MeshStandardMaterial({ color: 0x45454a, roughness: 0.95 });
   const paving = new THREE.MeshStandardMaterial({ color: 0x9b968c, roughness: 0.95 });
 
-  // streets
+  // old-town grid streets
   for (const st of TOWN_STREETS) flatRibbon(group, st.pts, st.w, asphalt);
 
-  // ---- instanced buildings
+  // ---- ring boulevards — arched decks over the river channel (bridges)
+  RING_PTS.forEach((pts, ri) => {
+    const P = profileRibbon(group, pts, RINGS[ri].w, asphalt, (x, z) => {
+      const g = bedAt(x, z);
+      const arch = Math.max(0, 1 - Math.abs(z) / 14);
+      return Math.max(g + 0.16, bedAt(x, 0) + 3.6 + 1.15 * arch * arch);
+    });
+    deckPiers(group, P, 0.4, matConcreteDark());
+  });
+
+  // radial avenues linking the rings to the old core
+  for (const pts of RADIAL_PTS) flatRibbon(group, pts, 2.5, asphalt);
+
+  // riverside promenades (trees + lamps line these)
+  flatRibbon(group, [[124, 12.4], [140, 12.2], [158, 12.2], [176, 12.4], [190, 12.8]], 1.9, paving);
+  flatRibbon(group, [[124, -12.4], [140, -12.3], [158, -12.3], [176, -12.5], [190, -12.9]], 1.9, paving);
+
+  // ---- elevated expressway + interchange
+  buildExpressway(group);
+
+  // ---- dense districts (instanced, three building classes)
   const bldTex = makeBuildingTex();
-  const bldMat = new THREE.MeshStandardMaterial({ map: bldTex, roughness: 0.85, metalness: 0.05 });
-  const spots: { x: number; z: number; w: number; d: number; h: number; rot: number; tone: number }[] = [];
+  const lowMat = new THREE.MeshStandardMaterial({ map: bldTex, roughness: 0.85, metalness: 0.05 });
+  const midMat = new THREE.MeshStandardMaterial({ map: makeTowerTex(false), roughness: 0.68, metalness: 0.1 });
+  const glassMat = new THREE.MeshStandardMaterial({ map: makeTowerTex(true), roughness: 0.38, metalness: 0.35, envMapIntensity: 0.35 });
+  interface BSpot { x: number; z: number; w: number; d: number; h: number; rot: number; tone: number }
+  const spotsL: BSpot[] = [];
+  const spotsM: BSpot[] = [];
+  const spotsH: BSpot[] = [];
   const tones = [0xd9cdb4, 0xcbb99b, 0xd8d2c4, 0xc2b49a, 0xd3c1a6, 0xbfae94, 0xded6c6, 0xb7a68c];
-  // deterministic scatter on both banks
+  const glassTones = [0x8fa4b2, 0xa3b8c4, 0x7f98a8, 0xb0c2cc];
+  // deterministic scatter across the whole valley floor — dense ring districts
   let seed = 1;
   const nextRnd = () => hashRnd(seed++ * 12.9898);
-  for (const [zSign, x0, x1] of [[1, 152, 188], [-1, 152, 184]] as const) {
-    for (let gx = x0; gx <= x1; gx += 5.2) {
-      for (let g = 0; g < 7; g++) {
-        const zBase = zSign * (14 + g * 4.6 + nextRnd() * 1.6);
-        const z = zSign > 0 ? zBase + 2 : zBase - 1;
-        if (Math.abs(z) > 43 || Math.abs(z) < 13.5) continue;
-        const d = distToStreets(gx + nextRnd(), z);
-        if (d < 3.4 || d > 14) continue;
-        const ground = bedAt(gx, z);
-        if (ground < 3.2 || ground > 15.5) continue;
-        const slope = Math.abs(bedAt(gx + 2, z) - ground) + Math.abs(bedAt(gx, z + 2) - ground);
-        if (slope > 1.7) continue;
-        if (nextRnd() < 0.28) continue;
-        spots.push({
-          x: gx + nextRnd() * 1.4,
-          z,
-          w: 2.6 + nextRnd() * 2.2,
-          d: 2.4 + nextRnd() * 2.0,
-          h: nextRnd() < 0.16 ? 5.5 + nextRnd() * 3.4 : 2.7 + nextRnd() * 2.3,
-          rot: (nextRnd() - 0.5) * 0.24,
-          tone: Math.floor(nextRnd() * tones.length),
-        });
+  for (let gx = 121; gx <= 189; gx += 3.9) {
+    for (const zs of [1, -1]) {
+      for (let g = 0; g < 11; g++) {
+        const z = zs * (13.9 + g * 3.6 + nextRnd() * 1.6);
+        const x = gx + nextRnd() * 2.2;
+        if (Math.abs(z) > 49.5 || x > 189.5) continue;
+        const r = Math.hypot(x - TOWN_C[0], z);
+        if (r < 15.5) continue;
+        if (distToPaths(x, z) < 3.2) continue;
+        if (!clearOfSites(x, z)) continue;
+        const ground = bedAt(x, z);
+        if (ground < 3.3 || ground > 16.5) continue;
+        const slope = Math.abs(bedAt(x + 2, z) - ground) + Math.abs(bedAt(x, z + 2) - ground);
+        if (slope > 2.1) continue;
+        if (nextRnd() < 0.16) continue;
+        // downtown weight — towers cluster on the inner rings near the dam
+        const core = clamp(1 - (r - 16) / 27, 0, 1);
+        const roll = nextRnd();
+        const rot = (nextRnd() - 0.5) * 0.5;
+        if (core > 0.4 && roll < 0.07 + 0.2 * core) {
+          spotsH.push({ x, z, w: 3.9 + nextRnd() * 1.6, d: 3.5 + nextRnd() * 1.5, h: 13.5 + nextRnd() * 9.5, rot, tone: Math.floor(nextRnd() * glassTones.length) });
+        } else if (roll < 0.5) {
+          spotsM.push({ x, z, w: 3.1 + nextRnd() * 1.4, d: 2.9 + nextRnd() * 1.3, h: 6.8 + nextRnd() * 6.2, rot, tone: Math.floor(nextRnd() * tones.length) });
+        } else {
+          spotsL.push({ x, z, w: 2.6 + nextRnd() * 1.6, d: 2.4 + nextRnd() * 1.5, h: 2.8 + nextRnd() * 3.4, rot, tone: Math.floor(nextRnd() * tones.length) });
+        }
       }
     }
   }
   const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-  const inst = new THREE.InstancedMesh(boxGeo, bldMat, spots.length);
   const m4 = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const eu = new THREE.Euler();
   const col = new THREE.Color();
-  spots.forEach((s, i) => {
-    eu.set(0, s.rot, 0);
-    q.setFromEuler(eu);
-    m4.compose(new THREE.Vector3(s.x, bedAt(s.x, s.z) + s.h / 2 - 0.12, s.z), q, new THREE.Vector3(s.w, s.h, s.d));
-    inst.setMatrixAt(i, m4);
-    inst.setColorAt(i, col.setHex(tones[s.tone]));
-  });
-  inst.castShadow = true;
-  inst.receiveShadow = true;
-  inst.instanceMatrix.needsUpdate = true;
-  group.add(inst);
-  // flat roof slabs for a subset
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x8d867b, roughness: 0.95 });
-  const roofs = new THREE.InstancedMesh(boxGeo, roofMat, spots.length);
-  let ri = 0;
-  spots.forEach((s, i) => {
-    if (hashRnd(i * 3.77) < 0.55) return;
-    m4.compose(new THREE.Vector3(s.x, bedAt(s.x, s.z) + s.h + 0.06, s.z), q.identity(), new THREE.Vector3(s.w + 0.35, 0.16, s.d + 0.35));
-    roofs.setMatrixAt(ri++, m4);
-  });
-  roofs.count = ri;
-  roofs.castShadow = true;
-  group.add(roofs);
+  const buildClass = (spots: BSpot[], mat: THREE.Material, tint: number[], roofsToo: boolean): void => {
+    const inst = new THREE.InstancedMesh(boxGeo, mat, spots.length);
+    spots.forEach((s, i) => {
+      eu.set(0, s.rot, 0);
+      q.setFromEuler(eu);
+      m4.compose(new THREE.Vector3(s.x, bedAt(s.x, s.z) + s.h / 2 - 0.12, s.z), q, new THREE.Vector3(s.w, s.h, s.d));
+      inst.setMatrixAt(i, m4);
+      inst.setColorAt(i, col.setHex(tint[s.tone]));
+    });
+    inst.castShadow = true;
+    inst.receiveShadow = true;
+    inst.instanceMatrix.needsUpdate = true;
+    group.add(inst);
+    if (!roofsToo) return;
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x8d867b, roughness: 0.95 });
+    const roofs = new THREE.InstancedMesh(boxGeo, roofMat, spots.length);
+    let ri = 0;
+    spots.forEach((s, i) => {
+      if (hashRnd(i * 3.77 + s.x) < 0.45) return;
+      m4.compose(new THREE.Vector3(s.x, bedAt(s.x, s.z) + s.h + 0.06, s.z), q.identity(), new THREE.Vector3(s.w + 0.35, 0.16, s.d + 0.35));
+      roofs.setMatrixAt(ri++, m4);
+    });
+    roofs.count = ri;
+    roofs.castShadow = true;
+    group.add(roofs);
+  };
+  buildClass(spotsL, lowMat, tones, true);
+  buildClass(spotsM, midMat, tones, true);
+  buildClass(spotsH, glassMat, glassTones, false);
+
+  // ---- landmark skyline towers (glass shafts + crowns + aviation beacons)
+  const beaconMat = new THREE.MeshStandardMaterial({ color: 0xff5540, emissive: 0xcc2200, emissiveIntensity: 1.4, roughness: 0.4 });
+  for (const [tx, tz, th, gi] of [
+    [159, 17, 24, 0], [172, -18.5, 21, 1], [183, 33, 18, 0], [150, -24, 19, 1], [186, -36, 16, 0],
+  ] as const) {
+    const tg = bedAt(tx, tz);
+    const shaft = new THREE.Mesh(new THREE.BoxGeometry(4.4, th, 4.0), gi ? glassMat : midMat);
+    shaft.position.y = th / 2 - 0.1;
+    shaft.castShadow = shaft.receiveShadow = true;
+    const crown = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.6, 4.4), matConcreteDark());
+    crown.position.y = th + 0.2;
+    crown.castShadow = true;
+    const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.11, 3.0, 6), matSteel());
+    spire.position.y = th + 1.9;
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), beaconMat);
+    beacon.position.y = th + 3.4;
+    const tG = new THREE.Group();
+    tG.add(shaft, crown, spire, beacon);
+    tG.position.set(tx, tg - 0.1, tz);
+    group.add(tG);
+  }
+
+  // ---- city trees (instanced groves lining promenades + filling blocks)
+  {
+    const treeSpots: { x: number; z: number; s: number }[] = [];
+    for (let x = 126; x <= 190; x += 3.6) {
+      const k = Math.floor(x / 3.6) % 2;
+      treeSpots.push({ x, z: 11.8 + k * 0.7, s: 0.85 + hashRnd(x) * 0.5 });
+      treeSpots.push({ x: x + 1.8, z: -11.8 - k * 0.7, s: 0.85 + hashRnd(x * 3) * 0.5 });
+    }
+    for (let x = 124; x <= 189; x += 5.1) {
+      for (const zs of [1, -1]) {
+        for (let g = 0; g < 9; g++) {
+          const z = zs * (15 + g * 4.1);
+          if (Math.abs(z) > 47) continue;
+          if (distToPaths(x, z) < 3.4) continue;
+          if (!clearOfSites(x, z, 0.4)) continue;
+          const ground = bedAt(x, z);
+          if (ground < 3.3 || ground > 16.5) continue;
+          if (hashRnd(x * 3.1 + z * 7.7) < 0.6) continue;
+          treeSpots.push({ x: x + hashRnd(x + z) * 2.2, z: z + hashRnd(x * 2 + z) * 2.2, s: 0.75 + hashRnd(x * 5 + z) * 0.7 });
+        }
+      }
+    }
+    const trunkGeo = new THREE.CylinderGeometry(0.09, 0.15, 1.7, 5);
+    const folGeo = new THREE.IcosahedronGeometry(1.05, 0);
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.95 });
+    const folMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, flatShading: true });
+    const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, treeSpots.length);
+    const fols = new THREE.InstancedMesh(folGeo, folMat, treeSpots.length);
+    const greens = [0x2f6d33, 0x3f7d3a, 0x54803c, 0x2c5c30, 0x4a7a35];
+    treeSpots.forEach((s, i) => {
+      const g = bedAt(s.x, s.z);
+      m4.makeTranslation(s.x, g + 0.8 * s.s, s.z);
+      trunks.setMatrixAt(i, m4);
+      m4.compose(new THREE.Vector3(s.x, g + 2.1 * s.s, s.z), q.identity(), new THREE.Vector3(s.s, s.s * 1.25, s.s));
+      fols.setMatrixAt(i, m4);
+      fols.setColorAt(i, col.setHex(greens[Math.floor(hashRnd(s.x * 9 + s.z) * greens.length)]));
+    });
+    trunks.castShadow = true;
+    fols.castShadow = true;
+    group.add(trunks, fols);
+  }
 
   // ---- landmarks
   // clock tower + plaza (right bank heart)
@@ -724,7 +1020,7 @@ export function buildTown(): { group: THREE.Group } {
     group.add(bench);
   }
 
-  // streetlights (instanced)
+  // streetlights (instanced) — old grid + ring boulevards
   const lightSpots: [number, number][] = [];
   for (const st of TOWN_STREETS) {
     for (let i = 1; i < st.pts.length; i += 1) {
@@ -736,6 +1032,13 @@ export function buildTown(): { group: THREE.Group } {
         const t = (k + 0.5) / n;
         lightSpots.push([ax + (bx - ax) * t + 1.6, az + (bz - az) * t + 1.3]);
       }
+    }
+  }
+  for (const pts of RING_PTS) {
+    for (let i = 0; i < pts.length - 1; i += 2) {
+      const [ax, az] = pts[i];
+      const [bx, bz] = pts[i + 1];
+      lightSpots.push([(ax + bx) / 2 + 1.6, (az + bz) / 2 + 1.3]);
     }
   }
   const poleGeo = new THREE.CylinderGeometry(0.045, 0.06, 3.3, 5);
@@ -794,18 +1097,48 @@ export function buildTown(): { group: THREE.Group } {
 
 // ============================================================ FAR TERRAIN
 // Visual-only continuation of the world beyond the solver domain: the valley
-// runs on, then a mountain ring closes the horizon (fog blends it out).
+// runs on, then a towering amphitheater of jagged granite peaks closes the
+// horizon — the reservoir hugs between the upstream range like a fjord head.
+function ridgeN(px: number, pz: number, oct: number): number {
+  // 0..1 ridged multifractal — inverted abs(noise) gives sharp crest lines
+  let s = 0, a = 0.5, f = 1;
+  for (let i = 0; i < oct; i++) {
+    const n = 1 - Math.abs(2 * fbm(px * f, pz * f, 2) - 1);
+    s += a * n * n;
+    f *= 2.13;
+    a *= 0.5;
+  }
+  return Math.min(s * 1.4, 1);
+}
+
 function farBed(x: number, z: number): number {
   const cx = clamp(x, 0.2, LX - 0.2);
   const cz = clamp(z, -LZ / 2 + 0.2, LZ / 2 - 0.2);
   let h = bedAt(cx, cz);
-  // upstream / downstream closures rise steeply (they sit behind the valley
-  // axis); the side ranges rise gently so overview sight-lines stay open
-  const riseX = Math.max((6 - x) * 0.4, (x - (LX + 26)) * 0.42, 0);
-  const riseZ = Math.max((-LZ / 2 - 30 - z) * 0.26, (z - (LZ / 2 + 30)) * 0.26, 0);
-  const rise = Math.max(riseX, riseZ);
-  h += Math.min(rise, 95) * (0.62 + 0.75 * fbm(x * 0.035 + 5.5, z * 0.035 + 1.1, 4));
-  h += (fbm(x * 0.06 + 9.1, z * 0.06 + 3.3, 3) - 0.5) * 9;
+  // distance beyond each solver-domain edge
+  const dUp = Math.max(-x, 0);
+  const dDown = Math.max(x - LX, 0);
+  const dNorth = Math.max(-LZ / 2 - z, 0);
+  const dSouth = Math.max(z - LZ / 2, 0);
+  // amphitheater: the north wall (behind the dam) towers over the reservoir,
+  // the upstream headwall hugs the lake between peaks, the south rim stays
+  // lower so the default aerial camera looks over it into the bowl, and the
+  // valley runs on downstream before the eastern wall closes the horizon
+  const rise = Math.max(
+    dUp > 0 ? Math.min(7 + dUp * 1.5, 125) : 0,
+    dDown > 0 ? Math.min(Math.max(dDown - 40, 0) * 1.4, 125) : 0,
+    dNorth > 0 ? Math.min(5 + dNorth * 2.1, 130) : 0,
+    dSouth > 0 ? Math.min(9 + dSouth * 1.0, 55) : 0,
+  );
+  if (rise > 0) {
+    // frequencies kept below the terrain mesh sampling rate — anything finer
+    // aliases into ugly triangular spikes
+    const r1 = ridgeN(x * 0.02 + 7.7, z * 0.02 + 2.9, 3); // major crests
+    const r2 = fbm(x * 0.011 + 1.2, z * 0.011 + 8.8, 3); // massifs & passes
+    const peaks = 0.42 + 1.15 * Math.pow(r1, 1.5);
+    h += rise * peaks * (0.55 + 0.75 * r2);
+    h += (fbm(x * 0.035 + 3.3, z * 0.035 + 6.1, 2) - 0.5) * Math.min(3 + rise * 0.16, 9);
+  }
   return h;
 }
 
@@ -822,7 +1155,7 @@ function farPatch(x0: number, x1: number, z0: number, z1: number, sx: number, sz
     const z = pos.getZ(i);
     const y = farBed(x, z);
     pos.setY(i, y);
-    const e = 2.4;
+    const e = 3.2;
     const sl = Math.hypot(farBed(x + e, z) - farBed(x - e, z), farBed(x, z + e) - farBed(x, z - e)) / (2 * e);
     terrainColor(x, z, y, sl, tc);
     col.setRGB(tc.r, tc.g, tc.b, THREE.SRGBColorSpace);
@@ -842,15 +1175,15 @@ function farPatch(x0: number, x1: number, z0: number, z1: number, sx: number, sz
 
 export function buildFarTerrain(): { group: THREE.Group } {
   const group = new THREE.Group();
-  const E = 170; // how far the ring extends sideways
+  const E = 260; // how far the ring extends sideways
   const Z0 = -LZ / 2;
   const Z1 = LZ / 2;
-  // upstream continuation (covers the corners too)
-  group.add(farPatch(-150, 0, -E, E, 30, 68));
+  // upstream continuation — rises into the headwall range that hugs the lake
+  group.add(farPatch(-260, 0, -E, E, 60, 100));
   // downstream continuation toward the horizon
-  group.add(farPatch(LX, LX + 150, -E, E, 30, 68));
+  group.add(farPatch(LX, LX + 260, -E, E, 60, 100));
   // side ranges
-  group.add(farPatch(0, LX, Z0 - E, Z0, 44, 30));
-  group.add(farPatch(0, LX, Z1, Z1 + E, 44, 30));
+  group.add(farPatch(0, LX, Z0 - E, Z0, 78, 64));
+  group.add(farPatch(0, LX, Z1, Z1 + E, 78, 64));
   return { group };
 }

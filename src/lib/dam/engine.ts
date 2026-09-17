@@ -223,7 +223,7 @@ export class DamSim {
   private sensorClock = 0;
   private evacLine: THREE.Line | null = null;
   private audio = new RiverAudio();
-  private sunDir = new THREE.Vector3(-0.42, 0.62, 0.28).normalize();
+  private sunDir = new THREE.Vector3(0.46, 0.6, 0.3).normalize();
   // weather / storm system
   private sunLight!: THREE.DirectionalLight;
   private hemiLight!: THREE.HemisphereLight;
@@ -328,7 +328,7 @@ export class DamSim {
     container.appendChild(this.renderer.domElement);
 
     this.camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.5, 6000);
-    this.camera.position.set(150, 58, 132);
+    this.camera.position.set(238, 132, 146);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.set(100, 12, 0);
@@ -336,17 +336,17 @@ export class DamSim {
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = 1.54;
     this.controls.minDistance = 12;
-    this.controls.maxDistance = 640;
+    this.controls.maxDistance = 980;
 
-    this.scene.fog = new THREE.Fog(0xc6d8ea, 380, 1600);
+    this.scene.fog = new THREE.Fog(0xc6d8ea, 470, 2300);
 
     // sky + environment
     const sky = new Sky();
     sky.scale.setScalar(12000);
     const su = sky.material.uniforms;
     this.skyU = su as unknown as Record<string, THREE.IUniform>;
-    su.turbidity.value = 5.5;
-    su.rayleigh.value = 2.4;
+    su.turbidity.value = 4.6;
+    su.rayleigh.value = 2.2;
     su.mieCoefficient.value = 0.006;
     su.mieDirectionalG.value = 0.85;
     su.sunPosition.value.copy(this.sunDir);
@@ -354,23 +354,24 @@ export class DamSim {
     skyScene.add(sky);
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(skyScene).texture;
-    this.scene.environmentIntensity = 0.32;
+    this.scene.environmentIntensity = 0.22;
     pmrem.dispose();
     this.scene.add(sky);
 
-    // lights
-    const sun = new THREE.DirectionalLight(0xffe8c8, 2.1);
+    // lights — warm key sun + cool low ambient gives the valley its
+    // sunlit-warm-rock / shadowed-cool-rim contrast (matches the reference)
+    const sun = new THREE.DirectionalLight(0xffd9a8, 2.35);
     this.sunLight = sun;
     sun.position.copy(this.sunDir).multiplyScalar(420);
     sun.castShadow = true;
     sun.shadow.mapSize.set(4096, 4096);
     const sc = sun.shadow.camera;
-    sc.left = -95; sc.right = 95; sc.top = 95; sc.bottom = -95; sc.near = 100; sc.far = 950;
+    sc.left = -120; sc.right = 120; sc.top = 120; sc.bottom = -120; sc.near = 100; sc.far = 1150;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.6;
     sun.target.position.set(105, 10, 0);
     this.scene.add(sun, sun.target);
-    const hemi = new THREE.HemisphereLight(0xbfd8ef, 0x6b6354, 0.45);
+    const hemi = new THREE.HemisphereLight(0xbfd8ef, 0x5c5346, 0.32);
     this.hemiLight = hemi;
     this.scene.add(hemi);
 
@@ -613,8 +614,8 @@ export class DamSim {
         uTime: { value: 0 },
         uRain: { value: 0 },
         uFogColor: { value: new THREE.Color(0xc6d8ea) },
-        uFogNear: { value: 380 },
-        uFogFar: { value: 1600 },
+        uFogNear: { value: 470 },
+        uFogFar: { value: 2300 },
       },
     });
     const mesh = new THREE.Mesh(geo, this.waterMat);
@@ -758,19 +759,19 @@ export class DamSim {
     }
 
     // dim / storm the atmosphere
-    this.sunLight.intensity = 2.1 * (1 - 0.7 * rv) + this.flash * 5.5;
-    this.sunLight.color.setHex(this.flash > 0.25 ? 0xdfe8ff : 0xffe8c8);
-    this.hemiLight.intensity = 0.45 * (1 - 0.4 * rv) + this.flash * 1.2;
-    this.scene.environmentIntensity = 0.32 * (1 - 0.5 * rv);
+    this.sunLight.intensity = 2.35 * (1 - 0.7 * rv) + this.flash * 5.5;
+    this.sunLight.color.setHex(this.flash > 0.25 ? 0xdfe8ff : 0xffd9a8);
+    this.hemiLight.intensity = 0.32 * (1 - 0.4 * rv) + this.flash * 1.2;
+    this.scene.environmentIntensity = 0.22 * (1 - 0.5 * rv);
     const fog = this.scene.fog as THREE.Fog;
     fog.color.copy(this.fogDay).lerp(this.fogStorm, rv * 0.85);
-    fog.near = 380 - 200 * rv;
-    fog.far = 1600 - 700 * rv;
+    fog.near = 470 - 220 * rv;
+    fog.far = 2300 - 1150 * rv;
     this.renderer.toneMappingExposure = 0.85 - 0.13 * rv + this.flash * 0.12;
     const su = this.skyU;
     if (su) {
-      su.turbidity.value = 5.5 + 4.5 * rv;
-      su.rayleigh.value = Math.max(2.4 - 1.7 * rv, 0.3);
+      su.turbidity.value = 4.6 + 5.4 * rv;
+      su.rayleigh.value = Math.max(2.2 - 1.6 * rv, 0.3);
       su.mieCoefficient.value = 0.006 + 0.02 * rv;
     }
 
@@ -1697,13 +1698,13 @@ export class DamSim {
 
   setCamera(preset: CamPreset): void {
     const P: Record<CamPreset, [THREE.Vector3, THREE.Vector3]> = {
-      overview: [new THREE.Vector3(198, 98, 110), new THREE.Vector3(102, 8, 2)],
+      overview: [new THREE.Vector3(256, 148, 72), new THREE.Vector3(94, 8, 0)],
       dam: [new THREE.Vector3(76, 27, 52), new THREE.Vector3(114, 17, 0)],
       valley: [new THREE.Vector3(178, 9, 46), new THREE.Vector3(118, 10, -2)],
-      top: [new THREE.Vector3(96, 195, 0.01), new THREE.Vector3(96, 0, 0)],
+      top: [new THREE.Vector3(96, 245, 0.01), new THREE.Vector3(96, 0, 0)],
       reservoir: [new THREE.Vector3(74, 34, 44), new THREE.Vector3(20, 14, 0)],
-      impact: [new THREE.Vector3(168, 105, 96), new THREE.Vector3(148, 2, 0)],
-      town: [new THREE.Vector3(150, 48, 88), new THREE.Vector3(166, 9, 24)],
+      impact: [new THREE.Vector3(172, 118, 104), new THREE.Vector3(150, 2, 0)],
+      town: [new THREE.Vector3(136, 64, 116), new THREE.Vector3(164, 6, 14)],
     };
     const [pos, tgt] = P[preset];
     this.tweenFrom.copy(this.camera.position);
