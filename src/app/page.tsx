@@ -636,6 +636,7 @@ export default function Page() {
             setCinematic(!cinematic);
           }}
           timeMinPerSec={dam.timeMinPerSec}
+          timeScale={timeScale}
         />
       )}
 

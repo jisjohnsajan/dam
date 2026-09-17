@@ -389,7 +389,7 @@ const RINGS: { r: number; w: number }[] = [
   { r: 38.5, w: 3.8 },
   { r: 45.5, w: 3.4 },
 ];
-const RING_HALF = 2.0; // rad — arcs wrap ~230° around the downstream bowl
+const RING_HALF = 2.2; // rad — arcs wrap ~250° around the downstream bowl
 const RADIAL_ANGLES = [0.42, 0.8, 1.18, 1.56]; // rad, mirrored per bank
 
 function arcPts(r: number, half: number, n: number): [number, number][] {
@@ -460,6 +460,10 @@ const CLEAR_RECTS: [number, number, number, number][] = [
   [176, -35, 14, 9], [180, -28, 10, 12], [174, 36, 13, 8], [182, 30, 9, 10], [186, -20, 8, 10], // farms
   [127.5, 27.5, 7, 6], [135, 29.5, 8, 6], [143, 28.5, 6, 6], // industry sheds
   [159, 17, 7, 7], [172, -18.5, 7, 7], [181, 29, 7, 7], [150, -24, 7, 7], [181, -31, 7, 7], // landmark towers
+  // civic landmark complexes (hospital / school / factory / waterworks / fuel)
+  [164, -21, 15, 11], [146, 25, 13, 11], [131, 32.5, 13, 10], [127, -24, 11, 10],
+  [176, 31, 8, 7], [150, 40, 10, 8], [138, 38.5, 9, 8], [162, 38.5, 10, 8],
+  [148, -38.5, 9, 8], [168, -38.5, 10, 8],
 ];
 function clearOfSites(x: number, z: number, m = 1.4): boolean {
   for (const [cx, cz, w, d] of CLEAR_RECTS)
@@ -753,32 +757,34 @@ export function buildTown(): { group: THREE.Group } {
   // circular city), towers toward the core, terraced low-rise at the rim
   let seed = 1;
   const nextRnd = () => hashRnd(seed++ * 12.9898);
-  const RING_BUILD_R = [16, 19.5, 23, 26.5, 30, 33.5, 37, 40.5, 44];
+  // CONCENTRIC RING DISTRICTS — 12 tight building arcs so the bowl floor reads
+  // as a dense city from any camera (the brief's 35-45% civilization share)
+  const RING_BUILD_R = [14, 17, 20, 23, 26, 29, 32, 35, 38, 41, 43.5, 46];
   for (let ri = 0; ri < RING_BUILD_R.length; ri++) {
     const r0 = RING_BUILD_R[ri];
     const arc = 2 * RING_HALF * r0;
-    const n = Math.max(8, Math.floor(arc / 4.2));
+    const n = Math.max(10, Math.floor(arc / 3.4));
     for (let i = 0; i < n; i++) {
-      const a = -RING_HALF + (2 * RING_HALF * i) / (n - 1) + (nextRnd() - 0.5) * (2.6 / r0);
-      const r = r0 + (nextRnd() - 0.5) * 3.0;
+      const a = -RING_HALF + (2 * RING_HALF * i) / (n - 1) + (nextRnd() - 0.5) * (2.4 / r0);
+      const r = r0 + (nextRnd() - 0.5) * 2.6;
       const x = TOWN_C[0] + r * Math.cos(a);
       const z = r * Math.sin(a);
-      if (Math.abs(z) < 12.4 || Math.abs(z) > 52) continue; // river corridor
-      if (distToPaths(x, z) < 3.0) continue;
+      if (Math.abs(z) < 12.6 || Math.abs(z) > 52) continue; // river corridor
+      if (distToPaths(x, z) < 2.7) continue;
       if (!clearOfSites(x, z)) continue;
       const ground = bedAt(x, z);
-      if (ground < 3.3 || ground > 16.5) continue;
+      if (ground < 3.3 || ground > 18.0) continue;
       const slope = Math.abs(bedAt(x + 2, z) - ground) + Math.abs(bedAt(x, z + 2) - ground);
-      if (slope > 2.1) continue;
-      if (nextRnd() < 0.13) continue;
+      if (slope > 2.6) continue;
+      if (nextRnd() < 0.07) continue;
       // tangential orientation — street fronts follow the ring curvature
       const rot = a + Math.PI / 2 + (nextRnd() - 0.5) * 0.26;
       // skyline weight — towers cluster on the inner rings near the dam
       const core = clamp(1 - (r - 15) / 30, 0, 1);
       const roll = nextRnd();
-      if (core > 0.35 && roll < 0.06 + 0.22 * core) {
+      if (core > 0.35 && roll < 0.06 + 0.24 * core) {
         spotsH.push({ x, z, w: 3.9 + nextRnd() * 1.6, d: 3.5 + nextRnd() * 1.5, h: 13.5 + nextRnd() * 9.5, rot, tone: Math.floor(nextRnd() * glassTones.length) });
-      } else if (roll < 0.52) {
+      } else if (roll < 0.5) {
         spotsM.push({ x, z, w: 3.1 + nextRnd() * 1.4, d: 2.9 + nextRnd() * 1.3, h: 6.8 + nextRnd() * 6.2, rot, tone: Math.floor(nextRnd() * tones.length) });
       } else {
         spotsL.push({ x, z, w: 2.6 + nextRnd() * 1.6, d: 2.4 + nextRnd() * 1.5, h: 2.8 + nextRnd() * 3.4, rot, tone: Math.floor(nextRnd() * tones.length) });
@@ -1120,6 +1126,358 @@ export function buildTown(): { group: THREE.Group } {
     group.add(shed, shedRoof);
   }
 
+  // ======================================================== CIVIC LANDMARKS
+  // Recognisable, labelled buildings so judges can name what the flood hits.
+
+  // ---- district hospital (left bank) — white slab complex + red cross
+  {
+    const hx = 164, hz = -21;
+    const g = bedAt(hx, hz);
+    const lot = new THREE.Mesh(new THREE.BoxGeometry(14.5, 0.1, 10.5), asphalt);
+    lot.position.set(hx, g + 0.05, hz);
+    lot.receiveShadow = true;
+    const main = new THREE.Mesh(new THREE.BoxGeometry(9.5, 3.4, 5.4), matWhite());
+    main.position.set(hx - 1.5, g + 1.75, hz - 1.6);
+    main.castShadow = main.receiveShadow = true;
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.6, 3.8), matWhite());
+    wing.position.set(hx + 4.2, g + 1.35, hz + 1.4);
+    wing.castShadow = true;
+    const band = new THREE.Mesh(new THREE.BoxGeometry(9.7, 0.28, 5.6), new THREE.MeshStandardMaterial({ color: 0x3d6f8e, roughness: 0.6 }));
+    band.position.set(hx - 1.5, g + 2.4, hz - 1.6);
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.14, 2.0), matWhite());
+    canopy.position.set(hx - 1.5, g + 2.0, hz + 1.6);
+    canopy.castShadow = true;
+    // red cross emblem
+    const cross = new THREE.Group();
+    const c1 = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.42, 0.12), new THREE.MeshStandardMaterial({ color: 0xd23a3a, roughness: 0.5 }));
+    const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.5, 0.12), c1.material);
+    cross.add(c1, c2);
+    cross.position.set(hx - 1.5, g + 4.3, hz - 1.6 + 2.74);
+    group.add(lot, main, wing, band, canopy, cross);
+  }
+
+  // ---- school (right bank) — E-block around a courtyard + flagpole
+  {
+    const sx = 146, sz = 25;
+    const g = bedAt(sx, sz);
+    const yard = new THREE.Mesh(new THREE.BoxGeometry(10.5, 0.08, 8.5), paving);
+    yard.position.set(sx, g + 0.04, sz);
+    yard.receiveShadow = true;
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xd9c9a6, roughness: 0.9 });
+    const barA = new THREE.Mesh(new THREE.BoxGeometry(9.5, 2.7, 2.7), wallMat);
+    barA.position.set(sx, g + 1.4, sz - 3.2);
+    const barB = new THREE.Mesh(new THREE.BoxGeometry(2.7, 2.3, 5.6), wallMat);
+    barB.position.set(sx - 4.6, g + 1.2, sz + 1.2);
+    const barC = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.3, 2.5), wallMat);
+    barC.position.set(sx + 2.6, g + 1.2, sz + 3.1);
+    [barA, barB, barC].forEach((m) => { m.castShadow = m.receiveShadow = true; });
+    const roofA = new THREE.Mesh(new THREE.BoxGeometry(9.9, 0.16, 3.1), new THREE.MeshStandardMaterial({ color: 0x8a4a35, roughness: 0.88 }));
+    roofA.position.set(sx, g + 2.85, sz - 3.2);
+    roofA.castShadow = true;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 4.6, 6), matSteel());
+    pole.position.set(sx, g + 2.3, sz);
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.55), new THREE.MeshStandardMaterial({ color: 0xff9933, roughness: 0.8, side: THREE.DoubleSide }));
+    flag.position.set(sx + 0.5, g + 4.3, sz);
+    group.add(yard, barA, barB, barC, roofA, pole, flag);
+  }
+
+  // ---- industrial works (right bench) — process hall + chimneys + tanks
+  {
+    const fx = 131, fz = 32.5;
+    const g = bedAt(fx, fz);
+    const hall = new THREE.Mesh(new THREE.BoxGeometry(10.5, 4.6, 6.4), matGalvanised());
+    hall.position.set(fx, g + 2.35, fz);
+    hall.castShadow = hall.receiveShadow = true;
+    const office = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.5, 3.0), matWhite());
+    office.position.set(fx - 6.6, g + 1.3, fz + 1.2);
+    office.castShadow = true;
+    for (const [cx, ch] of [[fx + 3.4, 10.5], [fx + 5.6, 8.6]] as const) {
+      const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.55, ch, 10), matConcreteDark());
+      stack.position.set(cx, g + 2.3 + ch / 2, fz - 1.8);
+      stack.castShadow = true;
+      const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 1.1, 10), new THREE.MeshStandardMaterial({ color: 0xb8452e, roughness: 0.7 }));
+      tip.position.set(cx, g + 2.3 + ch + 0.4, fz - 1.8);
+      group.add(stack, tip);
+    }
+    for (const tx of [fx - 2.2, fx + 0.2]) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 2.6, 12), matSteel());
+      tank.position.set(tx, g + 1.35, fz + 4.6);
+      tank.castShadow = true;
+      group.add(tank);
+    }
+    group.add(hall, office);
+  }
+
+  // ---- water treatment plant (upstream-left of the core) — clarifiers
+  {
+    const wx = 127, wz = -24;
+    const g = bedAt(wx, wz);
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(10.5, 0.12, 9.0), matConcrete());
+    pad.position.set(wx, g + 0.06, wz);
+    pad.receiveShadow = true;
+    group.add(pad);
+    for (const [ox, oz] of [[-2.4, -1.6], [2.0, 1.8]] as const) {
+      const basin = new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.3, 0.85, 18), matConcrete());
+      basin.position.set(wx + ox, g + 0.5, wz + oz);
+      basin.castShadow = true;
+      const water = new THREE.Mesh(
+        new THREE.CircleGeometry(2.05, 18),
+        new THREE.MeshStandardMaterial({ color: 0x2e8c96, roughness: 0.25, metalness: 0.1 }),
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.set(wx + ox, g + 0.94, wz + oz);
+      const pier = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 1.3, 8), matSteel());
+      pier.position.set(wx + ox, g + 1.2, wz + oz);
+      group.add(basin, water, pier);
+    }
+    const pump = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.3, 2.7), matWhite());
+    pump.position.set(wx + 3.2, g + 1.2, wz - 2.6);
+    pump.castShadow = true;
+    group.add(pump);
+  }
+
+  // ---- highway service station beside the down-ramp
+  {
+    const gx = 176, gz = 31;
+    const g = bedAt(gx, gz);
+    const fore = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.08, 6.5), asphalt);
+    fore.position.set(gx, g + 0.04, gz);
+    fore.receiveShadow = true;
+    const canopy = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.22, 4.6), matWhite());
+    canopy.position.set(gx - 1, g + 3.6, gz - 1);
+    canopy.castShadow = true;
+    for (const [px, pz] of [[gx - 3.8, gz - 2.6], [gx + 1.8, gz - 2.6], [gx - 3.8, gz + 0.6], [gx + 1.8, gz + 0.6]] as const) {
+      const colm = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 3.5, 8), matSteel());
+      colm.position.set(px, g + 1.75, pz);
+      group.add(colm);
+    }
+    for (const px of [gx - 2.2, gx + 0.4]) {
+      const isl = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.24, 2.6), paving);
+      isl.position.set(px, g + 0.14, gz - 1);
+      const pump = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.05, 0.4), new THREE.MeshStandardMaterial({ color: 0xc23c2e, roughness: 0.55 }));
+      pump.position.set(px, g + 0.75, gz - 1);
+      pump.castShadow = true;
+      group.add(isl, pump);
+    }
+    const kiosk = new THREE.Mesh(new THREE.BoxGeometry(2.8, 2.2, 2.3), matWhite());
+    kiosk.position.set(gx + 2.8, g + 1.15, gz + 1.6);
+    kiosk.castShadow = true;
+    const totem = new THREE.Mesh(new THREE.BoxGeometry(0.14, 3.4, 0.9), matWhite());
+    totem.position.set(gx - 4.4, g + 1.75, gz + 2.4);
+    group.add(fore, canopy, kiosk, totem);
+  }
+
+  // ============================================== SCALE REFERENCES / TRAFFIC
+  // Parked cars + trucks + buses along the street network — the scale cues
+  // that make dam, towers and flood depths physically readable.
+  {
+    interface VSpot { x: number; z: number; yaw: number; kind: 0 | 1 | 2 } // car | truck | bus
+    const vspots: VSpot[] = [];
+    const laneOffset = 1.55;
+    const consider = (ax: number, az: number, bx: number, bz: number, t: number, big: boolean): void => {
+      const x = ax + (bx - ax) * t;
+      const z = az + (bz - az) * t;
+      if (Math.abs(z) < 13.6) return; // river corridor + bridge arch zone
+      const yaw = Math.atan2(bx - ax, bz - az);
+      const nx = Math.cos(yaw), nz = -Math.sin(yaw);
+      const px = x + nx * laneOffset, pz = z + nz * laneOffset;
+      if (distToPaths(px, pz) < 1.2) return;
+      if (!clearOfSites(px, pz, 0.2)) return;
+      const g = bedAt(px, pz);
+      if (g < 3.3 || g > 18.5) return;
+      if (Math.abs(bedAt(px + 1, pz) - g) > 0.7) return;
+      const kind: 0 | 1 | 2 = big && hashRnd(px * 3.3 + pz * 7.7) > 0.72 ? (hashRnd(px + pz) > 0.5 ? 1 : 2) : 0;
+      vspots.push({ x: px, z: pz, yaw, kind });
+    };
+    for (const st of TOWN_STREETS) {
+      for (let i = 0; i < st.pts.length - 1; i++) {
+        const [ax, az] = st.pts[i];
+        const [bx, bz] = st.pts[i + 1];
+        const segLen = Math.hypot(bx - ax, bz - az);
+        const n = Math.max(1, Math.floor(segLen / 8));
+        for (let k = 0; k < n; k++) if (hashRnd(ax * 9 + bz * 3 + k * 13) < 0.6) consider(ax, az, bx, bz, (k + 0.5) / n, false);
+      }
+    }
+    for (const pts of RADIAL_PTS) {
+      for (let i = 0; i < pts.length - 1; i += 2) {
+        if (hashRnd(pts[i][0] * 5 + pts[i][1] * 2) < 0.55) consider(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], 0.5, false);
+      }
+    }
+    for (const pts of RING_PTS) {
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (Math.abs(pts[i][1]) < 13.6) continue;
+        if (hashRnd(pts[i][0] * 7.7 + pts[i][1] * 4.1) < 0.5) consider(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], 0.5, true);
+      }
+    }
+    // depot trucks at the industrial works + delivery truck at the market
+    for (const [tx, tz, ty] of [[136.5, 26.2, 0.4], [138.5, 26.4, 0.1], [128.5, 26.0, 1.2], [157.2, 29.6, 1.5]] as const) {
+      vspots.push({ x: tx, z: tz, yaw: ty, kind: 1 });
+    }
+    vspots.push({ x: 149.5, z: 24.4, yaw: 0.2, kind: 2 }, { x: 143.2, z: 22.8, yaw: 1.35, kind: 2 });
+
+    const carBody = new THREE.BoxGeometry(1.75, 0.5, 0.86);
+    const carTop = new THREE.BoxGeometry(0.95, 0.42, 0.78);
+    const truckBody = new THREE.BoxGeometry(2.5, 0.95, 1.06);
+    const truckCab = new THREE.BoxGeometry(0.62, 0.72, 1.0);
+    const busBody = new THREE.BoxGeometry(3.7, 0.95, 1.08);
+    const carPaint = [0xcfd4d8, 0x8d2f2f, 0x2f4d8d, 0xd8d2b8, 0x39434c, 0x5b8a5f, 0xb8772e, 0xe8e8ea];
+    const nCar = vspots.filter((v) => v.kind === 0).length;
+    const nTrk = vspots.filter((v) => v.kind === 1).length;
+    const nBus = vspots.filter((v) => v.kind === 2).length;
+    const carMesh = new THREE.InstancedMesh(carBody, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.35 }), Math.max(nCar, 1));
+    const carTopM = new THREE.InstancedMesh(carTop, new THREE.MeshStandardMaterial({ color: 0x24303a, roughness: 0.3, metalness: 0.2 }), Math.max(nCar, 1));
+    const trkMesh = new THREE.InstancedMesh(truckBody, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.15 }), Math.max(nTrk, 1));
+    const trkCabM = new THREE.InstancedMesh(truckCab, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.25 }), Math.max(nTrk, 1));
+    const busMesh = new THREE.InstancedMesh(busBody, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.2 }), Math.max(nBus, 1));
+    let ci = 0, ti = 0, bi = 0;
+    for (const v of vspots) {
+      const g = bedAt(v.x, v.z);
+      if (v.kind === 0) {
+        eu.set(0, v.yaw, 0); q.setFromEuler(eu);
+        m4.compose(new THREE.Vector3(v.x, g + 0.34, v.z), q, new THREE.Vector3(1, 1, 1));
+        carMesh.setMatrixAt(ci, m4);
+        carMesh.setColorAt(ci, col.setHex(carPaint[Math.floor(hashRnd(v.x * 13 + v.z * 3) * carPaint.length)]));
+        m4.compose(new THREE.Vector3(v.x - Math.sin(v.yaw) * 0.25, g + 0.72, v.z - Math.cos(v.yaw) * 0.25), q, new THREE.Vector3(1, 1, 1));
+        carTopM.setMatrixAt(ci, m4);
+        ci++;
+      } else if (v.kind === 1) {
+        eu.set(0, v.yaw, 0); q.setFromEuler(eu);
+        m4.compose(new THREE.Vector3(v.x, g + 0.62, v.z), q, new THREE.Vector3(1, 1, 1));
+        trkMesh.setMatrixAt(ti, m4);
+        trkMesh.setColorAt(ti, col.setHex(hashRnd(v.x + v.z) > 0.5 ? 0xd8d8dc : 0x7d8b99));
+        m4.compose(new THREE.Vector3(v.x + Math.sin(v.yaw) * 1.5, g + 0.5, v.z + Math.cos(v.yaw) * 1.5), q, new THREE.Vector3(1, 1, 1));
+        trkCabM.setMatrixAt(ti, m4);
+        trkCabM.setColorAt(ti, col.setHex(0x2f4d8d));
+        ti++;
+      } else {
+        eu.set(0, v.yaw, 0); q.setFromEuler(eu);
+        m4.compose(new THREE.Vector3(v.x, g + 0.66, v.z), q, new THREE.Vector3(1, 1, 1));
+        busMesh.setMatrixAt(bi, m4);
+        busMesh.setColorAt(bi, col.setHex(0xd8a72e));
+        bi++;
+      }
+    }
+    carMesh.count = ci; carTopM.count = ci; trkMesh.count = ti; trkCabM.count = ti; busMesh.count = bi;
+    [carMesh, carTopM, trkMesh, trkCabM, busMesh].forEach((m) => { m.castShadow = true; m.receiveShadow = true; });
+    group.add(carMesh, carTopM, trkMesh, trkCabM, busMesh);
+  }
+
+  // ---- utility poles with crossarms along the street grid
+  {
+    const poleSpots: { x: number; z: number; yaw: number }[] = [];
+    for (const st of TOWN_STREETS) {
+      for (let i = 0; i < st.pts.length - 1; i++) {
+        const [ax, az] = st.pts[i];
+        const [bx, bz] = st.pts[i + 1];
+        const segLen = Math.hypot(bx - ax, bz - az);
+        const n = Math.max(1, Math.floor(segLen / 11));
+        for (let k = 0; k < n; k++) {
+          const t = (k + 0.5) / n;
+          const x = ax + (bx - ax) * t, z = az + (bz - az) * t;
+          if (Math.abs(z) < 13.6) continue;
+          const yaw = Math.atan2(bx - ax, bz - az);
+          poleSpots.push({ x: x + Math.cos(yaw) * 2.05, z: z - Math.sin(yaw) * 2.05, yaw });
+        }
+      }
+    }
+    const poleGeo2 = new THREE.CylinderGeometry(0.055, 0.075, 4.1, 6);
+    const armGeo = new THREE.BoxGeometry(0.05, 0.05, 1.15);
+    const poleMat2 = new THREE.MeshStandardMaterial({ color: 0x6e5f4c, roughness: 0.95 });
+    const pInst = new THREE.InstancedMesh(poleGeo2, poleMat2, poleSpots.length);
+    const aInst = new THREE.InstancedMesh(armGeo, poleMat2, poleSpots.length);
+    poleSpots.forEach((p, i) => {
+      const g = bedAt(p.x, p.z);
+      eu.set(0, p.yaw, 0); q.setFromEuler(eu);
+      m4.compose(new THREE.Vector3(p.x, g + 2.05, p.z), q, new THREE.Vector3(1, 1, 1));
+      pInst.setMatrixAt(i, m4);
+      m4.compose(new THREE.Vector3(p.x, g + 3.7, p.z), q, new THREE.Vector3(1, 1, 1));
+      aInst.setMatrixAt(i, m4);
+    });
+    pInst.castShadow = true;
+    group.add(pInst, aInst);
+  }
+
+  // ---- extended farmland belt on the outer ring + farm huts + tree lines
+  {
+    const crops2: [number, number, number, number, string, string][] = [
+      [150, 40, 9, 6.5, '#8a9a4a', '#6d7d38'],
+      [138.5, 38.5, 8, 6.5, '#a5935a', '#87754a'],
+      [162, 38.5, 9, 6.5, '#7a8f43', '#5d7034'],
+      [148, -38.5, 8, 6.5, '#9a8a4a', '#7d7038'],
+      [168, -38.5, 9, 6.5, '#7d8f4a', '#63753a'],
+    ];
+    for (const [fx, fz, fw, fd, ca, cb] of crops2) {
+      const g = bedAt(fx, fz);
+      const field = new THREE.Mesh(
+        new THREE.PlaneGeometry(fw, fd),
+        new THREE.MeshStandardMaterial({ map: makeFieldTex(ca, cb), roughness: 1 }),
+      );
+      field.rotation.x = -Math.PI / 2;
+      field.rotation.z = hashRnd(fx * 2 + fz) * 0.4;
+      field.position.set(fx, g + 0.1, fz);
+      field.receiveShadow = true;
+      group.add(field);
+      // tree line along one edge + pump hut on some plots
+      if (hashRnd(fx + fz * 3) > 0.4) {
+        const hut = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.3, 1.4), matConcreteDark());
+        hut.position.set(fx + fw / 2 - 0.6, g + 0.7, fz - fd / 2 - 0.8);
+        hut.castShadow = true;
+        const hutRoof = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.12, 1.7), new THREE.MeshStandardMaterial({ color: 0x8a4a35, roughness: 0.9 }));
+        hutRoof.position.set(fx + fw / 2 - 0.6, g + 1.42, fz - fd / 2 - 0.8);
+        group.add(hut, hutRoof);
+      }
+    }
+  }
+
+  // ---- wooded rim: forest belt climbing the lower amphitheater slopes
+  {
+    const fSpots: { x: number; z: number; s: number }[] = [];
+    for (let x = 120; x <= 192; x += 2.6) {
+      for (let z = -54; z <= 54; z += 2.6) {
+        const rC = Math.hypot(x - BOWL_CX, z);
+        if (rC < 47.5 || rC > 61) continue;
+        if (Math.abs(z) < 14.5) continue; // keep the river gorge open
+        const g = bedAt(x, z);
+        if (g < 12 || g > 32) continue;
+        const slope = Math.abs(bedAt(x + 2, z) - g) + Math.abs(bedAt(x, z + 2) - g);
+        if (slope > 2.2) continue;
+        const h = hashRnd(x * 12.7 + z * 5.3);
+        if (h < 0.42) continue;
+        fSpots.push({ x: x + (hashRnd(x + z) - 0.5) * 1.8, z: z + (hashRnd(x * 2 + z) - 0.5) * 1.8, s: 1.15 + h * 0.9 });
+      }
+    }
+    // riverbank gallery — scattered broadleaf along the downstream channel
+    for (let x = 122; x <= 190; x += 3.1) {
+      for (const zs of [1, -1]) {
+        const z = zs * (13.4 + hashRnd(x * zs) * 3.4);
+        const g = bedAt(x, z);
+        if (g < 3.4 || g > 15) continue;
+        if (hashRnd(x * 3.7 + zs * 11) < 0.55) continue;
+        fSpots.push({ x, z, s: 0.95 + hashRnd(x * zs * 2) * 0.7 });
+      }
+    }
+    const trunkGeo2 = new THREE.CylinderGeometry(0.11, 0.19, 2.2, 5);
+    const folGeo2 = new THREE.IcosahedronGeometry(1.35, 0);
+    const trunkMat2 = new THREE.MeshStandardMaterial({ color: 0x5d4229, roughness: 0.95 });
+    const folMat2 = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, flatShading: true });
+    const trunks2 = new THREE.InstancedMesh(trunkGeo2, trunkMat2, fSpots.length);
+    const fols2 = new THREE.InstancedMesh(folGeo2, folMat2, fSpots.length);
+    const greens2 = [0x275c2b, 0x2f6d33, 0x3a7440, 0x245227, 0x416f30];
+    fSpots.forEach((s, i) => {
+      const g = bedAt(s.x, s.z);
+      m4.makeTranslation(s.x, g + 1.0 * s.s, s.z);
+      trunks2.setMatrixAt(i, m4);
+      eu.set(0, hashRnd(s.x * 7 + s.z) * Math.PI * 2, 0);
+      q.setFromEuler(eu);
+      m4.compose(new THREE.Vector3(s.x, g + 2.7 * s.s, s.z), q, new THREE.Vector3(s.s, s.s * 1.3, s.s));
+      fols2.setMatrixAt(i, m4);
+      fols2.setColorAt(i, col.setHex(greens2[Math.floor(hashRnd(s.x * 9 + s.z * 3) * greens2.length)]));
+    });
+    trunks2.castShadow = true;
+    fols2.castShadow = true;
+    group.add(trunks2, fols2);
+  }
+
   return { group };
 }
 
@@ -1143,12 +1501,13 @@ function farBed(x: number, z: number): number {
   const dSouth = Math.max(z - LZ / 2, 0);
   // rolling amphitheater — each wall eases in exponentially and caps far below
   // the old jagged 260 m peaks: the north wall (behind the dam) is tallest
-  // (~85 m over the valley), the upstream headwall ~65 m, the downstream east
-  // wall ~75 m, and the south rim stays low (~40 m) so the default aerial
-  // camera still looks over it into the city bowl
+  // (~85 m over the valley), the upstream headwall ~65 m, and the south rim
+  // stays low (~38 m) so the default aerial camera still looks over it into
+  // the city bowl. DOWNSTREAM stays deliberately low and late-rising: the
+  // river + floodplain must run on toward the horizon past the city
   const rise = Math.max(
     dUp > 0 ? (1 - Math.exp(-dUp / 55)) * 60 : 0,
-    dDown > 0 ? (dDown > 34 ? (1 - Math.exp(-(dDown - 34) / 60)) * 70 : 0) : 0,
+    dDown > 0 ? (dDown > 64 ? (1 - Math.exp(-(dDown - 64) / 80)) * 42 : 0) : 0,
     dNorth > 0 ? (1 - Math.exp(-dNorth / 48)) * 72 : 0,
     dSouth > 0 ? (1 - Math.exp(-dSouth / 70)) * 38 : 0,
   );

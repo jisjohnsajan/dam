@@ -92,16 +92,19 @@ export function bedAt(x: number, z: number): number {
   const wz = Math.abs(z);
   // the gorge pinches at the dam site; downstream the CIRCULAR BOWL (not a
   // linear widening) opens the floodplain where the ring city stands
-  const w0 = 30 + 4.5 * Math.sin(x * 0.045 + 1.3) + 2.6 * Math.sin(x * 0.013);
+  let w0 = 30 + 4.5 * Math.sin(x * 0.045 + 1.3) + 2.6 * Math.sin(x * 0.013);
+  // broad storage reach — the lake fills more of the upstream valley so the
+  // reservoir reads as a major body of water, not a river widening
+  if (x < DAM_X - 6) w0 += 2.5 * smoothstep(DAM_X - 6, 46, x);
 
   // incised main channel downstream of the dam (gaussian cut, ~2.2 m deep)
   if (x > DAM_X + 4) {
     floor -= 2.2 * Math.exp(-(wz * wz) / 100);
   }
 
-  // rounder reservoir — the lake bulges in its middle reach so it reads as a
-  // rounded basin (reference map), fading out before the dam approach
-  const bulge = 12 * Math.exp(-((x - 64) * (x - 64)) / 484) * smoothstep(104, 88, x);
+  // rounder reservoir — the lake bulges through its middle reach so it reads
+  // as a wide rounded basin (reference map), fading out before the dam approach
+  const bulge = 15 * Math.exp(-((x - 58) * (x - 58)) / 900) * smoothstep(104, 84, x);
   const wRes = w0 + bulge;
 
   const rough = 0.85 + 0.3 * fbm(x * 0.08 + 3.7, z * 0.08, 3);
@@ -122,12 +125,14 @@ export function bedAt(x: number, z: number): number {
   // exponential grade that eases out toward the domain edge, where the
   // far-terrain ring continues it as rounded, vegetated hills
   if (tCorr > 0) {
-    floor += (1 - Math.exp(-tCorr / 17)) * 21 * rough * inBowl;
+    floor += (1 - Math.exp(-tCorr / 18)) * 19 * rough * inBowl;
   }
 
-  // circular rim — the amphitheater wall enclosing the city on all sides
+  // circular rim — the amphitheater wall enclosing the city on all sides.
+  // Frames the map without walling off the view: the rim stays below the
+  // abutment line so the overview camera always sees dam → city in one shot.
   if (tRim > 0 && rimIn > 0) {
-    floor += (1 - Math.exp(-tRim / 20)) * 30 * rough * rimIn;
+    floor += (1 - Math.exp(-tRim / 21)) * 26 * rough * rimIn;
   }
 
   // Abutment shoulders — near the dam the valley walls rise just above the
@@ -328,20 +333,41 @@ export function terrainColor(
   let g = 0.29 + 0.058 * n + 0.026 * strata;
   let bl = 0.246 + 0.045 * n + 0.018 * strata;
 
-  // lush grass on gentle terrain (tropical valley floor + benches)
-  const grass = smoothstep(0.38, 0.1, slope) * smoothstep(25, 17.5, b) * (0.5 + 0.5 * n2);
+  // lush grass on gentle terrain (tropical valley floor + benches) — the band
+  // reaches further up the lower slopes so the valley reads as green, not raw
+  const grass = smoothstep(0.55, 0.12, slope) * smoothstep(45, 16, b) * (0.5 + 0.5 * n2);
   r = r * (1 - grass) + (0.16 + 0.05 * n2) * grass;
   g = g * (1 - grass) + (0.30 + 0.08 * n2) * grass;
   bl = bl * (1 - grass) + (0.115 + 0.03 * n2) * grass;
 
   // scrub vegetation clothing the slopes — the hills around the city bowl are
-  // green and rounded (reference image), so the band reaches well up-slope
-  // and tolerates moderate gradients
-  const scrub = smoothstep(1.15, 0.4, slope) * smoothstep(56, 30, b) * (0.3 + 0.7 * n);
-  const sv = scrub * 0.72;
-  r = r * (1 - sv) + (0.23 + 0.04 * n2) * sv;
-  g = g * (1 - sv) + (0.29 + 0.05 * n2) * sv;
-  bl = bl * (1 - sv) + (0.16 + 0.03 * n2) * sv;
+  // green and rounded (reference image), so the band covers every slope up to
+  // the highest far-ring domes (abs elevations reach ~100 m). The mountain
+  // override keeps the amphitheater ring green even where coarse far-patch
+  // vertices report steep slopes
+  const rC2 = Math.hypot(x - BOWL_CX, z);
+  const mountain = smoothstep(46, 58, rC2) * 0.95;
+  const scrub = Math.max(smoothstep(1.5, 0.35, slope), mountain) * smoothstep(135, 25, b) * (0.3 + 0.7 * n);
+  const sv = scrub * 0.9;
+  r = r * (1 - sv) + (0.21 + 0.04 * n2) * sv;
+  g = g * (1 - sv) + (0.285 + 0.05 * n2) * sv;
+  bl = bl * (1 - sv) + (0.15 + 0.03 * n2) * sv;
+
+  // forest floor — darker, richer green on the mid rim slopes (beyond the
+  // city) so the amphitheater reads as wooded hills framing the valley
+  const forest = Math.max(smoothstep(1.35, 0.3, slope), mountain * 0.9) * smoothstep(105, 25, b)
+    * smoothstep(40, 54, rC2) * (0.6 + 0.4 * n);
+  r = r * (1 - forest) + (0.125 + 0.03 * n2) * forest;
+  g = g * (1 - forest) + (0.235 + 0.05 * n2) * forest;
+  bl = bl * (1 - forest) + (0.115 + 0.025 * n2) * forest;
+
+  // urban ground — the city bowl floor gets a warm pavement/park blend so
+  // streets and districts sit on visibly developed land, not raw meadow
+  const urban = smoothstep(BOWL_R + 2, BOWL_R - 10, rC2) * smoothstep(17, 13.5, b)
+    * smoothstep(0.5, 0.12, slope) * (0.55 + 0.45 * n2);
+  r = r * (1 - urban) + (0.315 + 0.035 * n) * urban;
+  g = g * (1 - urban) + (0.30 + 0.03 * n) * urban;
+  bl = bl * (1 - urban) + (0.262 + 0.028 * n) * urban;
 
   // sandy channel bed — restricted to the incised channel band (gaussian cut
   // |z| ≲ 11) so the downstream floodplain — and its far-terrain continuation
@@ -360,9 +386,9 @@ export function terrainColor(
     bl = bl * (1 - s) + 0.175 * s;
   }
 
-  // sun-bleached rock only on the uppermost domes — mid slopes stay scrubby
-  // green-brown, so the smooth hills never read as bare battlements
-  const high = smoothstep(36, 78, b);
+  // sun-bleached rock only on the very top of the tallest far domes — every
+  // mid slope stays clothed in scrub/forest
+  const high = smoothstep(92, 138, b);
   const band = 0.5 + 0.5 * Math.sin(b * 0.55 + n2 * 4.2); // large rock strata
   r = r * (1 - high) + (0.265 + 0.058 * band + 0.026 * n) * high;
   g = g * (1 - high) + (0.248 + 0.046 * band + 0.022 * n) * high;

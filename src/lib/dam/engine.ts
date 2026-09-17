@@ -24,7 +24,8 @@ import {
 import {
   FlowField, buildDam, buildHouses, buildTrees, buildBarrels, buildDebris,
   buildRoads, buildGaugeStations, buildInfraMarkers, buildDockBoats, buildBoulders,
-  RiverAudio, type DamProps, type House, type Tree, type Barrel, type Chunk,
+  buildWarningSigns,
+  RiverAudio, type DamProps, type House, type Tree, type Barrel, type Chunk, type InfraPin,
 } from './props';
 import { buildPowerhouse, buildTown, buildFarTerrain, type PowerhouseProps } from './world';
 import {
@@ -218,6 +219,7 @@ export class DamSim {
   private barrels: Barrel[] = [];
   private chunks: Chunk[] = [];
   private floaters: Floater[] = [];
+  private infraPins: InfraPin[] = [];
   private sensorRoot: THREE.Group | null = null;
   private sensorMarkers = new Map<string, SensorMarker>();
   private sensorClock = 0;
@@ -674,7 +676,10 @@ export class DamSim {
     const g = buildGaugeStations();
     this.scene.add(g.group);
     const m = buildInfraMarkers();
+    this.infraPins = m.pins;
     this.scene.add(m.group);
+    const signs = buildWarningSigns();
+    this.scene.add(signs.group);
     const bo = buildBoulders();
     this.scene.add(bo.group);
     const dock = buildDockBoats();
@@ -1037,7 +1042,7 @@ export class DamSim {
         this.structDirty = false;
       }
 
-      const sub = clamp(Math.ceil(dtSim / DT_MAX), 1, 14);
+      const sub = clamp(Math.ceil(dtSim / DT_MAX), 1, 28);
       const h = dtSim / sub;
       for (let i = 0; i < sub; i++) this.simSubstep(h);
       this.simTime += dtSim;
@@ -1125,6 +1130,11 @@ export class DamSim {
 
     if (sc.mechanism === 'overtopping') {
       this.overtopT += dt;
+      // surcharge loading: the crest carries live water — a faint structural
+      // tremor builds until the erosion clock triggers
+      if (this.breachT === null) {
+        this.shake = Math.max(this.shake, 0.035 + 0.03 * clamp(this.overtopT / 7, 0, 1));
+      }
       // once overtopped for long enough, crest erosion begins
       if (this.overtopT > 7 && (this.breachT === null || this.breachT < 0)) {
         if (this.breachSpan === null) {
@@ -1141,6 +1151,14 @@ export class DamSim {
     // visuals, so water always pours exactly through the visibly-open gap.
     if (this.breachT !== null && this.breachSpan) {
       this.breachT += dt;
+      // STAGE 1 — hydraulic stress: while the breach clock is armed but not
+      // yet eroding, the structure hums under surcharge load (subtle vibration,
+      // growing as failure approaches — engineering tension, not an explosion)
+      if (this.breachT <= 0) {
+        const armSpan = Math.max(-this.breachT, 0.5);
+        const ramp = clamp(1 + this.breachT / armSpan, 0, 1);
+        this.shake = Math.max(this.shake, 0.045 + 0.11 * ramp * ramp);
+      }
       if (this.breachT > 0) {
         // just crossed the arming delay — fire the failure effects exactly once
         if (this.breachT <= dt) this.fireBreachFx();
@@ -1341,6 +1359,30 @@ export class DamSim {
     // powerhouse rotors spin with turbine discharge
     const rate = 1.1 + Math.min(this.lastQOut, 40) * 0.42;
     for (const r of this.powerhouse.rotors) r.rotation.y += rate * dt;
+
+    // infrastructure inundation status — SAFE → AT RISK → INUNDATED, driven
+    // purely by the simulated water depth at each landmark pin (visual layer
+    // only; the analysis panels keep their own authoritative computations)
+    for (const p of this.infraPins) {
+      f.sample(p.x, p.z, s);
+      const wd = s.eta - bedAt(p.x, p.z);
+      if (wd > 0.45) {
+        p.mat.color.setHex(0xff3b30);
+        p.mat.emissive.setHex(0xff3b30);
+        p.mat.emissiveIntensity = 0.9;
+        p.head.scale.setScalar(1.18 + Math.sin(this.simTime * 6) * 0.09);
+      } else if (wd > 0.12) {
+        p.mat.color.setHex(0xfbbf24);
+        p.mat.emissive.setHex(0xfbbf24);
+        p.mat.emissiveIntensity = 0.55;
+        p.head.scale.setScalar(1.05);
+      } else {
+        p.mat.color.setHex(p.baseColor);
+        p.mat.emissive.setHex(p.baseColor);
+        p.mat.emissiveIntensity = 0.25;
+        p.head.scale.setScalar(1);
+      }
+    }
   }
 
   // ============================================================ IoT sensor markers
@@ -1698,13 +1740,13 @@ export class DamSim {
 
   setCamera(preset: CamPreset): void {
     const P: Record<CamPreset, [THREE.Vector3, THREE.Vector3]> = {
-      overview: [new THREE.Vector3(312, 178, 76), new THREE.Vector3(112, 2, 0)],
+      overview: [new THREE.Vector3(294, 148, 108), new THREE.Vector3(126, 0, 0)],
       dam: [new THREE.Vector3(76, 27, 52), new THREE.Vector3(114, 17, 0)],
       valley: [new THREE.Vector3(178, 9, 46), new THREE.Vector3(118, 10, -2)],
       top: [new THREE.Vector3(126, 335, 6), new THREE.Vector3(126, 0, 0)],
       reservoir: [new THREE.Vector3(74, 34, 44), new THREE.Vector3(20, 14, 0)],
-      impact: [new THREE.Vector3(172, 118, 104), new THREE.Vector3(150, 2, 0)],
-      town: [new THREE.Vector3(136, 64, 116), new THREE.Vector3(164, 6, 14)],
+      impact: [new THREE.Vector3(218, 112, 130), new THREE.Vector3(156, 2, 0)],
+      town: [new THREE.Vector3(130, 52, 66), new THREE.Vector3(168, 2, -4)],
     };
     const [pos, tgt] = P[preset];
     this.tweenFrom.copy(this.camera.position);

@@ -1046,10 +1046,29 @@ export function TwinPanel({
         </label>
         <div className="mt-2">
           <div className="mb-1 flex justify-between text-[10px] text-slate-400">
-            <span>TIME SCALE</span>
-            <span className="font-mono text-cyan-300">{timeScale.toFixed(2)}×</span>
+            <span>PLAYBACK SPEED</span>
+            <span className="font-mono text-cyan-300">{timeScale < 1 ? timeScale.toFixed(2) : timeScale % 1 ? timeScale.toFixed(2) : timeScale.toFixed(0)}×</span>
           </div>
-          <Slider value={[timeScale]} min={0.1} max={2} step={0.05} onValueChange={([v]) => onTimeScale(v)} />
+          <div className="mb-1.5 grid grid-cols-6 gap-1">
+            {([0.25, 0.5, 1, 2, 4, 8] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => onTimeScale(v)}
+                className={`rounded border px-0 py-1 text-center font-mono text-[10px] transition-colors ${
+                  Math.abs(timeScale - v) < 0.001
+                    ? 'border-cyan-400/60 bg-cyan-600/30 text-cyan-100'
+                    : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                }`}
+              >
+                {v}×
+              </button>
+            ))}
+          </div>
+          <Slider value={[timeScale]} min={0.25} max={8} step={0.05} onValueChange={([v]) => onTimeScale(v)} />
+          <p className="mt-1 text-[9px] leading-snug text-slate-500">
+            Speed advances the simulation clock — flood depth, breach, gauges and
+            time stay synchronized. Changing speed never resets the run.
+          </p>
         </div>
         <label className="mt-2 flex items-center justify-between text-[11px] text-slate-300">
           Spray particles
@@ -1066,7 +1085,7 @@ export function TwinPanel({
 
 // ============================================================ timeline (time machine)
 export function TimelineBar({
-  snapCount, snapTimes, scrubIdx, onScrub, onLive, paused, onPause, stats, cams, onCam, cinematic, onCinema, timeMinPerSec,
+  snapCount, snapTimes, scrubIdx, onScrub, onLive, paused, onPause, stats, cams, onCam, cinematic, onCinema, timeMinPerSec, timeScale,
 }: {
   snapCount: number;
   snapTimes: number[];
@@ -1081,6 +1100,7 @@ export function TimelineBar({
   cinematic: boolean;
   onCinema: () => void;
   timeMinPerSec: number;
+  timeScale: number;
 }) {
   const maxIdx = Math.max(snapCount - 1, 0);
   return (
@@ -1091,6 +1111,18 @@ export function TimelineBar({
           {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
         </Button>
         <div className="flex min-w-0 flex-1 items-center gap-2">
+          <span
+            className={`hidden shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9.5px] font-semibold sm:inline-flex ${
+              paused
+                ? 'bg-amber-900/50 text-amber-300'
+                : timeScale > 1
+                  ? 'bg-cyan-900/60 text-cyan-200'
+                  : 'bg-white/5 text-slate-400'
+            }`}
+            title="Simulation playback speed"
+          >
+            {paused ? '⏸ PAUSED' : `▶ ${timeScale < 1 ? timeScale.toFixed(2) : timeScale % 1 ? timeScale.toFixed(2) : timeScale.toFixed(0)}×`}
+          </span>
           <span className="hidden shrink-0 text-[9px] tracking-[0.14em] text-slate-500 sm:inline">TIME MACHINE</span>
           <Slider
             value={[scrubIdx !== null ? scrubIdx : maxIdx]}

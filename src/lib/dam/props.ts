@@ -436,12 +436,17 @@ function concreteGrey(): THREE.MeshStandardMaterial {
 export function buildHouses(): { houses: House[]; group: THREE.Group } {
   const group = new THREE.Group();
   const houses: House[] = [];
+  // riverside villas on both banks + outer-ring cottages — the detailed,
+  // flood-interactive homes (the instanced districts handle bulk density)
   const spots: [number, number][] = [
     [140, -18], [148, -22], [158, -19], [145, 21], [156, 24], [166, 18],
     [163, -25], [173, -22], [179, 21], [151, 29],
+    [131, -19.5], [134, 17.5], [183, -20.5], [185, 18.5], [152, -29],
+    [169, 30.5], [141, -25.5], [187, 24.5], [129, 21.5], [155, 16.2],
   ];
   spots.forEach(([x, z], idx) => {
     const ground = bedAt(x, z);
+    if (ground < 3.2 || ground > 18) return; // stay on habitable ground
     const g = makeHouse(idx);
     g.position.set(x, ground, z);
     g.rotation.y = (idx * 0.9) % (Math.PI * 2);
@@ -542,6 +547,10 @@ export function buildTrees(): { trees: Tree[]; group: THREE.Group } {
     [166, 26, 0], [120, 30, 2], [100, -45, 1], [174, -17, 0], [86, 45, 0], [146, -30, 0],
     [132, 32, 1], [160, 31, 2], [170, 30, 0], [185, 24, 1], [186, -24, 0], [175, -28, 2],
     [155, -30, 0], [142, 31, 0], [124, -31, 1], [112, 44, 0], [92, 44, 2], [181, 27, 0],
+    // riverbank gallery along the downstream channel + reservoir shore clusters
+    [124, -14.6, 1], [131, 14.8, 0], [139, -15.2, 0], [147, 15.4, 2], [154, -14.8, 1],
+    [161, 15.0, 0], [168, -15.4, 1], [175, 15.2, 0], [182, -15.0, 2], [188, 15.6, 1],
+    [126, 44, 1], [138, -43, 0], [150, 43.5, 0], [160, -43.5, 2], [172, 43, 1],
   ];
   spots.forEach(([x, z, kind], idx) => {
     const ground = bedAt(x, z);
@@ -678,8 +687,18 @@ export function buildGaugeStations(): { group: THREE.Group } {
 }
 
 // ---------------------------------------------------------- infra marker pins
-export function buildInfraMarkers(): { group: THREE.Group } {
+export interface InfraPin {
+  kind: string;
+  x: number;
+  z: number;
+  head: THREE.Mesh;
+  mat: THREE.MeshStandardMaterial;
+  baseColor: number;
+}
+
+export function buildInfraMarkers(): { group: THREE.Group; pins: InfraPin[] } {
   const group = new THREE.Group();
+  const pins: InfraPin[] = [];
   const colors: Record<string, number> = {
     hospital: 0xe34d4d, school: 0xe0a63c, bridge: 0x39c3d8, substation: 0x9a6ae0, waterworks: 0x2fae7e,
   };
@@ -689,7 +708,8 @@ export function buildInfraMarkers(): { group: THREE.Group } {
   ];
   for (const [x, z, kind] of kindOf) {
     const ground = bedAt(x, z);
-    const mat = new THREE.MeshStandardMaterial({ color: colors[kind], roughness: 0.5, emissive: colors[kind], emissiveIntensity: 0.25 });
+    const baseColor = colors[kind];
+    const mat = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.5, emissive: baseColor, emissiveIntensity: 0.25 });
     const pin = new THREE.Group();
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.6, 5), mat);
     pole.position.y = 1.3;
@@ -703,7 +723,43 @@ export function buildInfraMarkers(): { group: THREE.Group } {
     pin.add(pole, head, ring);
     pin.position.set(x, ground, z);
     group.add(pin);
+    pins.push({ kind, x, z, head, mat, baseColor });
   }
+  return { group, pins };
+}
+
+// ------------------------------------------- dam approach warning signage
+export function buildWarningSigns(): { group: THREE.Group } {
+  const group = new THREE.Group();
+  const boardMat = new THREE.MeshStandardMaterial({ color: 0xf2c218, roughness: 0.6 });
+  const inkMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.7 });
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x8a8f94, roughness: 0.5, metalness: 0.4 });
+  const makeSign = (x: number, z: number, yaw: number): void => {
+    const g = new THREE.Group();
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.7, 6), postMat);
+    post.position.y = 0.85;
+    post.castShadow = true;
+    const board = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.85, 0.06), boardMat);
+    board.position.y = 1.95;
+    board.castShadow = true;
+    // hazard triangle + "DAM BREAK FLOOD ZONE" bars
+    const tri = new THREE.Mesh(new THREE.ConeGeometry(0.26, 0.3, 3), inkMat);
+    tri.position.set(0, 2.12, 0.035);
+    const bar1 = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.09, 0.03), inkMat);
+    bar1.position.set(0, 1.88, 0.035);
+    const bar2 = bar1.clone();
+    bar2.position.y = 1.74;
+    bar2.scale.setScalar(0.75);
+    g.add(post, board, tri, bar1, bar2);
+    g.position.set(x, bedAt(x, z), z);
+    g.rotation.y = yaw;
+    group.add(g);
+  };
+  // valley road approaches (both banks) + town-side expressway ramp
+  makeSign(119.5, 24.6, 2.6);
+  makeSign(119.5, -24.8, -2.6);
+  makeSign(146.5, 22.8, 2.9);
+  makeSign(153.5, -21.6, -2.9);
   return { group };
 }
 

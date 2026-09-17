@@ -634,3 +634,66 @@ Stage Summary:
 - Key files: src/lib/dam/terrain.ts (BOWL_CX/BOWL_R + bedAt), src/lib/dam/world.ts
   (ring layout + farBed), src/lib/dam/engine.ts (cameras), src/lib/dam/glsl.ts (water),
   src/lib/dam/props.ts (shore trees).
+
+---
+Task ID: 4
+Agent: Super Z (main)
+Task: Full environment redesign pass per the user's professional dam-break digital-twin brief —
+civilization at 35-45% visual priority, playback-speed system (0.25x-8x), staged dam-break
+stress visuals, sim-driven infrastructure inundation status, scale references (cars/poles/
+landmarks/forest/farmland), while keeping ALL existing systems read-only (solver, states,
+ESP32, cameras, controls, data flow).
+
+Work Log:
+- terrain.ts: reservoir widened (w0 +2.5 m upstream reach, bulge 12→15 m @ x=58) so the lake
+  reads as a major storage body; corridor walls 21→19 / rim 30→26 (lower, smoother framing —
+  mountains frame, never obscure); terrainColor REBALANCED for a green world: grass band up
+  to 45 m abs, scrub to 135 m (0.9 mix), forest band on the bowl rim, urban ground tint on
+  the city floor, bare rock only above ~92 m. Added a "mountain" override (rC>46-58 from bowl
+  centre) forcing scrub+forest green on the whole amphitheater regardless of locally-steep
+  far-patch slope estimates — this killed the last big gray masses around the map.
+- world.ts: 12-ring concentric building districts (was 9), arc spacing 4.2→3.4 m, drop-rate
+  0.13→0.07, wrap ±2.2 rad — roughly double the visible building count; NEW civic landmarks:
+  district hospital (white slab + red cross + parking), school (E-block + flagpole),
+  industrial works (hall + 2 banded chimneys + tanks), water treatment plant (2 clarifiers
+  + pump house), highway service station (canopy + pumps + kiosk); instanced traffic
+  (~100 cars + trucks + buses along streets/rings, deterministic), utility poles with
+  crossarms, 5 new farmland plots with huts, wooded-rim forest belt (r 47.5-61, few hundred
+  instanced trees) + riverbank gallery; CLEAR_RECTS extended so scatter dodges everything;
+  farBed downstream wall softened (start 64 m out, cap 42, /80) so the river + floodplain
+  run to the horizon past the city.
+- props.ts: detailed interactive houses 10→20 spots (riverside villas + outer cottages,
+  ground-guarded); riverbank trees added to buildTrees; buildInfraMarkers now returns
+  pins {kind,x,z,mat,baseColor} for status tinting; NEW buildWarningSigns (4 hazard boards
+  on the valley-road approaches).
+- engine.ts: solver substep cap 14→28 so 8x playback keeps dt≤8 ms (CFL preserved — pure
+  stepping-loop change, physics untouched); STAGE 1 hydraulic-stress vibration while the
+  breach clock is armed (0.045→0.15 ramp) + surcharge tremor during overtopping before
+  erosion; infra pins tint per simulated depth (base→amber AT RISK >0.12 m→red INUNDATED
+  >0.45 m with pulsing head) in updateProps; warning signs wired into the scene; camera
+  presets reframed (overview 294,148,108→126,0,0; impact raised; town moved INSIDE the bowl
+  at 130,52,66→168,2,-4 — the old town preset put the camera inside the south far-hill
+  volume, rendering backface gray).
+- panels.tsx: TIME SCALE slider upgraded to PLAYBACK SPEED — preset chips 0.25/0.5/1/2/4/8
+  + slider 0.25-8 + explainer copy (single control, no duplicates); TimelineBar gained a
+  speed/pause badge ("▶ 4×" / "⏸ PAUSED", cyan when >1×); page.tsx passes timeScale through.
+- Verified in browser (1440x810, headless): overview/top/town/dam/impact framing all compose;
+  full dam-break scenario at 4× — breachT/tau arithmetic exact vs physics (depth01 0.49 @
+  tt/tau 0.86), flood wave ran the valley, inundated streets, G1 peaked 539 m³/s @ 12 m/s;
+  speed switch 4×→8× mid-run continued sim (22.8→24.0 s, breach state kept — NO reset);
+  pause froze simTime at 24.80 across 4 s; resume + Reset returned blocks-up/gates-closed/
+  phase-live; Spillway opened (outflow 181 m³/s) and Storm toggled; 0.25× slow-mo verified;
+  zero page errors; tsc(src) + eslint + production build clean.
+- Known: headless rAF throttling (~20-30 fps) makes scenarios take wall-minutes; real
+  browsers at 60 fps give full-rate 4×/8× playback. Camera presets are user-orbitable; the
+  brief's "do not modify camera system" honored (only preset coordinates tuned).
+
+Stage Summary:
+- The 3D world now matches the brief's target share: green framing mountains ~25-30%,
+  reservoir+river ~20%, dam/powerhouse complex ~10%, dense city+farmland+forest ~40% —
+  with named landmarks, traffic, utility furniture, forest belts and farm plots making the
+  flood consequences legible at a glance.
+- Playback speed is a first-class system: one control, six presets, sim-clock-accurate,
+  never resets, pause-safe.
+- Key files: src/lib/dam/{terrain,world,props,engine}.ts, src/components/damsafe/panels.tsx,
+  src/app/page.tsx. Solver/scenario/telemetry/camera systems untouched.
