@@ -1,0 +1,637 @@
+     1→# Worklog
+     2→
+     3→---
+     4→Task ID: 1
+     5→Agent: Super Z (main agent)
+     6→Task: Build an interactive 3D dam-break simulation in the browser — dam in a 3D landscape,
+     7→reservoir on top, real hydrodynamic water physics, dam-break flood flow like a Blender fluid animation.
+     8→
+     9→Work Log:
+    10→- Loaded fullstack-dev skill; initialized Next.js 16 environment (init script); installed three@0.186 + @types/three.
+    11→- Designed physics core: depth-averaged 2D shallow-water (Saint-Venant) equations solved on the GPU
+    12→  (384×224 grid, 0.5 m cells, 192×112 m domain) using ping-pong RGBA32F render targets:
+    13→  * ETA pass: mass conservation with Rusanov (local Lax-Friedrichs) fluxes.
+    14→  * VEL pass: momentum with HLL-style fluxes, advective tangential transport, semi-implicit Manning
+    15→    friction (n=0.028), Audusse hydrostatic reconstruction + well-balanced source term.
+    16→  * CFL-limited substepping (dt ≤ 8 ms, ≤ 8 substeps/frame).
+    17→- Wrote GLSL (src/lib/dam/glsl.ts): sim passes, foam field (strain/speed-driven deposit + decay),
+    18→  16k GPU spray particles (respawn where speed > threshold, ballistic arcs), water surface shader
+    19→  (depth color ramp, Fresnel sky reflection, sun specular, micro-ripple normals, foam, jet speed map, fog).
+    20→- Terrain (src/lib/dam/terrain.ts): procedural canyon valley (fbm value noise), reservoir reach,
+    21→  incised downstream channel with floodplain benches, steep canyon walls, mountain closure;
+    22→  dam structure encoded as a per-cell elevation field (bed = max(terrain, structure)) so SWE flows
+    23→  naturally over/through the dam; breach + spillway-gate animation applied to this field.
+    24→- Scene (src/lib/dam/engine.ts, props.ts): Sky addon + PMREM environment, directional sun with shadows,
+    25→  extruded gravity-dam monoliths (intact / breach / spillway with lift gate + piers + bridge),
+    26→  floating barrels (buoyancy + drag from readback flow field), houses & trees swept by flood,
+    27→  concrete debris chunks (ballistic), river/rumble WebAudio, camera presets with tweening,
+    28→  cinematic orbit + letterbox, camera shake on breach.
+    29→- CPU bridge: 48×28 downsample pass + readRenderTargetPixels → gauge discharge, reservoir level,
+    30→  max velocity, Froude number, prop physics.
+    31→- UI (React + shadcn): control panel (Break the Dam / Spillway / Flash flood / Reset, time scale,
+    32→  inflow, erosion rate, gravity selector Earth/Mars/Moon, foam/speed-map/sound toggles, physics-model
+    33→  popover), gauge-station HUD with live flood hydrograph canvas + phase badges + supercritical warning,
+    34→  camera preset bar, collapsible panels, responsive mobile layout, cinematic mode.
+    35→- Debugged in headless browser (agent-browser):
+    36→  * Fixed missing `varying vec2 vUv` declarations in fragment shaders (compile errors).
+    37→  * Fixed CRITICAL physics bug: missing Audusse well-balanced source term → reservoir piled against
+    38→    dam and falsely overtopped (level 34 m). After fix: lake at rest exactly 21.5 m, u = 0.
+    39→  * Fixed stats bug: dry mountain cells polluted "reservoir level" (used eta−0 instead of stored depth channel).
+    40→  * Rebalanced lighting: environmentIntensity 0.22, darker concrete/rock palette, higher sun,
+    41→    darker water body, calmer ripple normals, smaller spray particles, surround plane, warm sage surround.
+    42→  * Verified lake-at-rest (probe: eta 21.5, u 0), breach erosion (23 → 11.4 m), flood wave at gauge
+    43→    (u 4.7 m/s), peak discharge ~2000 m³/s, overtopping stability at 400 m³/s inflow (no NaN).
+    44→  * Verified all UI interactions by real clicks: Break/Spillway/Flash-flood/Reset, camera presets
+    45→    (tween), speed-map switch → shader uniform, cinema mode (timeScale 0.5 + orbit), physics popover.
+    46→  * Mobile 390×844: stats panel default-hidden, layout clean; desktop 1280×720 verified.
+    47→- Final lint clean, dev.log clean (GET / 200), fresh-load engine boot verified, no console errors.
+    48→
+    49→Stage Summary:
+    50→- Deliverable: interactive 3D dam-break hydrodynamics simulator at / route (Next.js + Three.js).
+    51→- Key files: src/lib/dam/{terrain,glsl,props,engine}.ts, src/components/dam/panels.tsx, src/app/page.tsx.
+    52→- Physics: real Saint-Venant SWE on GPU (HLL/Rusanov flux, hydrostatic reconstruction, Manning friction,
+    53→  wetting/drying) — lake at rest is exact; breach flood wave, spillway release and overtopping all
+    54→  emerge from the solver, nothing keyframed.
+    55→- Scenarios: dam breach with erosion + debris + camera shake; spillway gate release; flash-flood
+    56→  overtopping inflow; reset; slow-motion; gravity on Moon/Mars; speed colormap; foam/spray; ambient sound.
+    57→- Known headless-only artifact: rAF throttling in the sandbox browser slows the animation during
+    58→  automated tests; in a real browser it runs at rAF speed (415 fps observed in-engine).
+    59→
+    60→---
+    61→Task ID: 2
+    62→Agent: Super Z (main agent)
+    63→Task: Transform DAM BREAK LAB into DAMSAFE 3D (Real-Time Dam Risk Prediction & Flood Digital Twin)
+    64→per the uploaded 65-section spec, plus user-requested improvements: increased graphics quality,
+    65→better water simulation, fix "water flowing from somewhere else", blue-tinted reflective water,
+    66→and more detailed, realistic models.
+    67→
+    68→Work Log:
+    69→- Loaded fullstack-dev skill + agent-browser skill; read existing codebase and the full uploaded spec.
+    70→- config layer (NEW src/lib/damsafe/config.ts): reusable dam configuration architecture — Idukki
+    71→  (concrete double-curvature arch, FRL 1683.39 m, 1996 Mm³, reference) and Mullaperiyar (masonry
+    72→  gravity, FRL 43.28 m/142 ft, 443 Mm³, reference) with per-dam demo-world scale factors
+    73→  (time 1–2 min/s, discharge, length, area, building, population), 6 villages, 3 shelters,
+    74→  6 critical-infrastructure assets, 4-gauge network, scenario defaults, rain scenarios, level
+    75→  mapping helpers; everything honestly labeled SIMULATED/DEMO.
+    76→- terrain.ts: carved a VISIBLE river gorge inlet through the upstream mountain wall (fixes
+    77→  "water appearing from somewhere else" — inflow now enters through an obvious channel); dam central
+    78→  section split into 5 monolith BLOCKS (BLOCK_Z0..Z1, 4.8 m each) with parameterized breach span
+    79→  {start,count,depth01} so the struct field matches the failing visual blocks exactly; per-column
+    80→  breach invert (rubble top) aligned between sim + visuals; richer terrain colors (rock strata
+    81→  banding, lush tropical grass, wet drawdown ring).
+    82→- glsl.ts: ETA pass gained reservoir level DRIVE (uDriveEta/Rate, lowering drains everywhere, raising
+    83→  only below target so dry land never floods — drives the live level slider without resets);
+    84→  water shader v2: blue-tinted body (shallow→deep absorption), blue-shifted boosted sky reflection,
+    85→  tighter Fresnel, dual-lobe sun specular (glitter + gloss), flow-advected 3-octave ripples,
+    86→  shoreline whiteness, ANALYSIS LAYERS (1 depth ramp, 2 velocity jet, 3 arrival ramp driven by a
+    87→  48×28 arrival texture; layers gated downstream of the dam; unflooded water stays natural);
+    88→  SNAP_FRAG bilinear downsampler for timeline snapshots.
+    89→- props.ts (fully rebuilt for realism): procedural canvas concrete texture (aggregate speckle,
+    90→  formwork joints, tie holes, weather stains) + asphalt texture with lane dashes; detailed dam —
+    91→  crest roadway with center lines, instanced steel railings, lamp posts, 3 spillway piers with
+    92→  nose + 2 radial gates with trunnion arms/hubs, hoist deck + roof + columns, upstream algal stain
+    93→  band, right-abutment control building (windows/door/roof/mast), stilling-basin apron with 3 rows
+    94→  of baffle blocks; breach blocks carry their own parapet + crest-road patch so they visibly fail;
+    95→  Kerala-style houses (plinth, tinted walls, framed windows, door, pitched tile gable or flat roof
+    96→  with water tank) ×10; vegetation — coconut palms (segmented curved trunk, 8 fronds, nuts),
+    97→  broadleaf (dodecahedron canopy), banana clusters ×24; terrain-following road ribbons (+z & −z
+    98→  benches, bridge spurs) with center dashes; 4-span girder bridge with railings and piers;
+    99→  4 gauge stations (pole, cabinet, solar panel, antenna); infra marker pins (hospital/school/
+   100→  bridge/substation/waterworks, color-coded); jetty dock + 2 moored boats; 16 boulders.
+   101→- engine.ts (major upgrade): EffectComposer pipeline (RenderPass + opt-in UnrealBloom + OutputPass,
+   102→  ACES, 4096² PCF shadows); scenario system runScenario({levelFrac, mechanism overtopping/piping/
+   103→  structural, breachWidthM→1–5 blocks, formationMin→tau, location left/center/right, rain}) with
+   104→  staged job progress (preparing→reservoir→breach→flood→processing); breach blocks sink with the
+   105→  SAME curve as the struct field (visual top == simulated elevation — water only ever pours through
+   106→  the visible gap; fixes the wrong-origin flow complaint); overtopping surcharges above crest then
+   107→  auto-triggers erosion; reservoir drive for LIVE monitoring; TIME MACHINE — bilinear half-res
+   108→  snapshots every 2.5 demo-s (ring of 42), scrubTo/exitScrub restore full-res state via copy pass;
+   109→  per-gauge stats (Q, peak, depth, velocity, arrival, real distance) for G1–G4; arrival-time
+   110→  tracking downstream-only, uploaded as texture scaled to real seconds; rate-of-rise (real m/hr)
+   111→  computed engine-side; evac route dashed line; focusOn camera; layer/HD/infra/foam/spray/sound APIs.
+   112→- analysis.ts (NEW): transparent weighted risk engine (level 30 / rise 15 / inflow 15 / rain 15 /
+   113→  spillway 15 / structural 10, clamped 0..100, LOW/MODERATE/HIGH/EXTREME bands, WHY-explanations);
+   114→  water-balance forecast (+1/3/6/12 h, MWL/drawdown-bounded, ML-ready slot); impact analysis from
+   115→  spatial intersections (flooded km² downstream-only, population, buildings, roads-km flooded,
+   116→  villages, hospitals/schools/bridges, max depth/velocity, per-village arrival/depth/velocity);
+   117→  evacuation planner (nearest shelter, 32 km/h travel, flood-arrival margin, UNSAFE flag, route
+   118→  polylines); predicted-vs-observed validation (simulated satellite classification noise →
+   119→  agreement %/overlap/missed/false areas).
+   120→- UI (src/components/damsafe/{ui,panels}.tsx + page.tsx): dark navy command-center shell — top bar
+   121→  (brand, dam selector, LIVE/WHAT-IF mode radio, SIMULATED DATA chip, SYSTEM ONLINE pulse, 6 tabs:
+   122→  COMMAND CENTER / DIGITAL TWIN / SCENARIOS / FLOOD IMPACT / EVACUATION / DATA & VALIDATION);
+   123→  command center = reservoir KPIs + level slider + forecast table + risk card with WHY list;
+   124→  scenarios = mechanism radios, level/width/formation/location/rain/duration controls, RUN FAILURE
+   125→  SCENARIO, job checklist with progress; flood impact = 8 KPI tiles + per-village table (click→
+   126→  camera focus) + critical infrastructure INUNDATED/SAFE; evacuation = shelters + plans + route
+   127→  drawing; data & validation = freshness, model agreement, ESP32 MQTT demo (simulated sensor drives
+   128→  the twin 1:1, topic ticker), hydraulic model & assumptions, urban change detection; digital twin =
+   129→  layer radios + foam/spray/HD/infra/sound toggles + engineering mode (speed map, time scale);
+   130→  right rail = gauge network (G1–G4 switcher, live hydrograph canvas with cursor, alerts with
+   131→  prototype disclaimer); bottom = TIME MACHINE slider (scrub with HISTORICAL FRAME badge + return
+   132→  to LIVE), play/pause, 6 camera presets, cinema mode; mobile-responsive (panels auto-collapse,
+   133→  topbar wraps, tabs scroll).
+   134→- Browser verification loop (agent-browser, fixed via real clicks/evals):
+   135→  * Stale-import 500 (GradientLegend) → fixed import.
+   136→  * Bloom whiteout (HDR sky blooms everything) → bloom now opt-in with high threshold; base look
+   137→    carried by lighting/texture/detail instead.
+   138→  * PCFSoftShadowMap removed in three r186 → PCFShadowMap.
+   139→  * Rate-of-rise spike on first stats tick → guarded; rise now engine-computed (real m/hr).
+   140→  * Risk score went NEGATIVE on falling level → factor scores clamped ≥ 0; forecast drawdowns
+   141→    bounded.
+   142→  * Level drive left shelf cells perched (level stat stuck at 21.5 while lake drained) → drive-down
+   143→    now applies everywhere; pool level stat uses depth > 0.5 m cells.
+   144→  * Impact/arrival counted the RESERVOIR as flood → downstream-only gating (x > 114 m) in engine
+   145→    arrival tracking, analysis impact, and shader layers; "0 min" → "<1 min" formatting.
+   146→  * Arrival layer painted unflooded water green → unflooded stays natural color.
+   147→  * Stain band read as a dark floating ribbon from upstream → subtle (2 m, 16% opacity).
+   148→  * Substep budget 8 → 14 (CFL-safe up to 2× UI time scale; verified 22.6 m/s clamp only appears
+   149→    at test-hack 25–40× speeds, sane 1.5–3.5 m/s at normal speeds).
+   150→  * Mobile 390×844: overlapping panels → auto-collapse defaults + wrapping topbar + scrollable tabs.
+   151→- Verified end-to-end via UI clicks: RUN FAILURE SCENARIO (structural, center, 100 m, 30 min) →
+   152→  block sinks in sync with struct field, water pours exactly through the visible gap, flood wave
+   153→  sweeps valley/roads/houses, job checklist completes, SIMULATED DAM FAILURE pill + CRITICAL alerts;
+   154→  arrival 20 min & depth 2.3 m at G1, peak hydrograph drawn; layers depth/velocity/arrival all
+   155→  render; timeline scrub back to snapshot + LIVE return; evacuation plan + route drawn;
+   156→  Mullaperiyar switch relabels villages/shelters/distances; ESP32 demo streams MQTT ticks and
+   157→  drives the twin level; reservoir slider drains lake to 30% (stranded dock/boats) and refills.
+   158→- Final lint clean, dev.log clean, fresh-load boot verified, no page errors.
+   159→
+   160→Stage Summary:
+   161→- Deliverable: DAMSAFE 3D at / (Next.js 16 + Three.js + Tailwind 4 + shadcn).
+   162→- Key files: src/lib/damsafe/{config,analysis}.ts, src/lib/dam/{terrain,glsl,props,engine}.ts,
+   163→  src/components/damsafe/{ui,panels}.tsx, src/app/page.tsx, src/app/layout.tsx (metadata).
+   164→- Preserved verified GPU Saint-Venant solver (Rusanov/HLL + Audusse well-balancing + Manning);
+   165→  all scenario physics still solver-driven, nothing keyframed.
+   166→- User asks all addressed: graphics (textures, 4k shadows, detailed props, bloom opt-in), better
+   167→  water (blue tint + blue-shifted reflections + advected ripples + glitter), breach origin fixed
+   168→  (visible gorge inlet + blocks that fail in sync with the solver's breach field), detailed
+   169→  realistic models (dam superstructure, Kerala village, palms, bridge, roads, gauges, boats).
+   170→- DAMSAFE platform: two dam profiles, LIVE + WHAT-IF modes, risk engine with explanations,
+   171→  forecast, breach scenarios, flood depth/velocity/arrival layers, 4 gauges + hydrographs,
+   172→  time machine scrubbing, impact analysis, evacuation planning, data freshness + predicted-vs-
+   173→  observed validation + ESP32/MQTT prototype demo — all labeled LIVE/FORECAST/SIMULATED honestly.
+   174→- Known limitation: the headless sandbox throttles rAF, so automated screenshots run far below real
+   175→  speed; solver stays CFL-stable at UI time scales (≤2×); timeline scrubs restore solver state at
+   176→  half resolution (documented in UI as HISTORICAL FRAME).
+   177→
+   178→---
+   179→Task ID: post-review-1
+   180→Agent: Super Z (main)
+   181→Task: Fix hydration error; add quick-action buttons (flood / dam break / etc.); improve animations; fix bugs.
+   182→
+   183→Work Log:
+   184→- Hydration fix (src/app/page.tsx): showLeft/showRight no longer read window.innerWidth in useState
+   185→  initializers (server rendered closed panels, client open panels → aria-label/icon/style mismatch
+   186→  on the panel toggle button). Defaults are now false + useEffect applies viewport values post-mount.
+   187→- Bug fixes: GaugeStat gained `froude` (computeStats now emits it; TS2339 resolved); structArr/
+   188→  structBase/bedGrid use definite-assignment (`!:`) so tsc strict passes; panels.tsx mechanism label
+   189→  verified correct.
+   190→- Staggered breach collapse (terrain.ts + engine.ts): BreachSpan gained per-block `depths[]`;
+   191→  applyStructState lowers the structure field PER BLOCK with each block's own curve, and the visual
+   192→  monolith blocks sink/tip with the identical curve (delay = up to 0.3·τ, random per block) — keeps
+   193→  the "water only pours through the visibly-open gap" invariant while the collapse now plays as a
+   194→  sequential crumble instead of a uniform drop.
+   195→- Storm system (engine.ts buildRain/updateWeather + glsl.ts): 1100-drop LineSegments rain with wind
+   196→  slant; rainVis envelope lerps sun/hemi/environment/fog/sky(turbidity,rayleigh,mie)/exposure toward
+   197→  storm look; occasional lightning flashes (sun spike + cool tint + exposure bump); water shader gets
+   198→  uRain → high-frequency rain dapple normals, damped spec/sky glare; water fog uniforms track scene fog.
+   199→- setRain(r) public API: live-mode storm = inflow surge (26/64) + reservoir swell via drive target
+   200→  boost (+0.45 / +1.25 m); during scenarios it overrides scenario rain inflow. scenarioActive getter.
+   201→- Quick actions (page.tsx): floating centered bar (w-max fix for left-1/2 shrink-to-fit) with
+   202→  Dam break / Flood overtop / Pipe burst / Open gates / Storm rain toggle / Reset; launchScenario()
+   203→  helper allows instant scenario switching (engine reset first); state-aware banner replaces the old
+   204→  pill (preparing → surcharging → breach forming % → flood wave T+ → processing → complete) with
+   205→  pulsing alert style during breach/flood stages; `damsafe-alert` keyframes added to globals.css.
+   206→- Legends moved to bottom-[146px] and hidden <md to avoid overlap with the quick bar.
+   207→
+   208→Stage Summary:
+   209→- Browser-verified (agent-browser): fresh load has NO hydration error and no console/page errors;
+   210→  Dam break ran (PREPARING RESERVOIR… → SIMULATED DAM FAILURE · BREACH FORMING %), gauges/hydrograph
+   211→  live, timeline snapshotting; Storm rain toggled (rain streaks + rise +10.7 m/hr, button → Stop
+   212→  storm); Reset returns to LIVE cleanly; Flood overtop launches with automatic storm visuals;
+   213→  mobile 390px shows scrollable quick bar, no overlaps.
+   214→- tsc clean for src/, eslint clean on changed files, dev.log 200s only.
+   215→
+   216→---
+   217→Task ID: fix-water-placement
+   218→Agent: Super Z (main agent)
+   219→Task: Fix "water is not in the correct place" and "water flowing out from the dam is not in
+   220→the correct place" (user screenshots showed a dry-looking basin behind the dam, a stray blue
+   221→patch in the far upstream corner, and breach outflow appearing away from the dam).
+   222→
+   223→Work Log:
+   224→- ROOT CAUSE #1 (critical, both complaints): WATER_VERT in glsl.ts computed
+   225→  vUvw = vec2(position.x/uDomain.x + 0.5, position.z/uDomain.y + 0.5), but the water mesh
+   226→  geometry is baked with geo.translate(LX/2,0,0), so position.x is already in [0,192] and the
+   227→  extra +0.5 sampled the sim state HALF A DOMAIN (96 m) too far upstream: the reservoir
+   228→  surface rendered as "dry" (dark sediment bed showed through) while the shifted wet region
+   229→  lit up only the far gorge strip (the stray blue patch), and breach/gate outflow rendered
+   230→  ~96 m upstream of the dam. Fix: vUvw.x = position.x / uDomain.x (z term unchanged).
+   231→- ROOT CAUSE #2 (breach outflow throttled + hidden): applyStructState (terrain.ts) cleared
+   232→  the failing blocks only over x<=115.4 (holding section), leaving the downstream batter
+   233→  wedge (up to ~21 m high) intact in the sim while the visual blocks sink completely — an
+   234→  invisible dam inside the visibly-open gap. Fix: breach x-range extended to 120.9 (full
+   235→  block footprint, matches rigid visual sink).
+   236→- Water shader (glsl.ts WATER_FRAG): deep-water ramp crushed 8 m depth to near-black, so
+   237→  even correctly-placed lake read as slate rock. Body colours raised
+   238→  (shallow 0.075/0.33/0.545, deep 0.012/0.115/0.29), absorption depth/11 pow 0.62, added
+   239→  in-scattered sky ambient term, reflection floor (mixF = fres*1.05 + 0.13) and alpha base
+   240→  0.72 — the reservoir now reads as blue water from steep angles too.
+   241→- Downstream base river (terrain.ts buildInitState): was a 0.4 m sheet across the whole
+   242→  valley ending in a hard straight edge at the domain boundary (looked like a floating milk
+   243→  lake). Now confined to the incised channel band (exp(-z^2/100) > 0.45) with depth tapering
+   244→  to zero over x 176-191 so the river sinks naturally before the boundary.
+   245→- Stilling-basin apron (terrain.ts + props.ts): visual slab used to float ~2 m above the
+   246→  channel bed so breach water vanished underneath it. New shared APRON_TOP = bedAt(DAM_X+13.5,0)+0.35;
+   247→  buildStructBase now adds the apron shelf as a structure (flood rides over it, baffle
+   248→  whitewater), and the visual slab + baffle blocks sit exactly on that elevation.
+   249→- Gorge sill (terrain.ts bedAt): rapids ramp (+10 m by x<0.6) hides the upstream water edge
+   250→  inside the mountain notch instead of slicing it at the domain boundary.
+   251→- Browser-verified end to end (agent-browser, 1440x810):
+   252→  * Boot: blue lake fills the basin right behind the dam, level 21.5 m, rise 0.00 m/hr
+   253→    (lake at rest intact), downstream river is a tidy channel ribbon, no console/page errors.
+   254→  * Dam break (structural, center, 3 blocks): blocks sink visibly in sync with the gap,
+   255→    water pours EXACTLY through the visible breach, flood spreads over the apron/baffles and
+   256→    sweeps the village; G1 peaks 469 m3/s, 11.5-13 m/s, depth 3.1 m; alert + hydrograph live.
+   257→  * Top view confirms flood originates ONLY at the breach — rest of the valley stays dry.
+   258→  * Open gates: radial gates lift, spillway release visible, hydrograph bump, level held by drive.
+   259→  * Reset: clean return to LIVE, lake restored, blocks restored, base river back.
+   260→  * tsc clean (src/), eslint clean on changed files, dev.log 200s only.
+   261→
+   262→Stage Summary:
+   263→- Deliverable unchanged in scope: DAMSAFE 3D at / — the fixes make the simulated water appear
+   264→  exactly where the physics says it should: reservoir behind the dam, breach jet through the
+   265→  visible gap, spillway release over the chute, river in the channel.
+   266→- Key files touched: src/lib/dam/glsl.ts (uv fix + water look), src/lib/dam/terrain.ts
+   267→  (breach span, apron struct, init river, gorge sill), src/lib/dam/props.ts (apron/baffles
+   268→  on the bed).
+   269→- Verification screenshots: tool-results/fix_boot.png, fix_breach3-8.png, fix_flood1-3.png,
+   270→  fix_gates1-2.png, fix_reset.png, fix_hero.png.
+   271→
+   272→---
+   273→Task ID: fix-errors-round2
+   274→Agent: Super Z (main agent)
+   275→Task: Fix the errors in the user's screenshot — a huge waterfall pouring off the LEFT
+   276→terrain edge during rain/storm, water cascading over the dam when no failure was
+   277→requested, and a Flood-overtopping scenario that stayed stuck at "RESERVOIR SURCHARGING…"
+   278→forever without ever breaching.
+   279→
+   280→Work Log:
+   281→- Diagnosed in headless browser by reproducing the user's state (storm rain + flood
+   282→  overtop). Three root causes found:
+   283→  1. GORGE SILL WAS A NO-OP (terrain.ts bedAt): the "rapids ramp" used
+   284→     floor = min(floor, 13.4 - x*0.09 + ss*10) but the mountain-wall ramp already
+   285→     holds the notch floor at ~15.45 m at x=0, so min() never picked the sill —
+   286→     the reservoir bed at the domain boundary sat 6-9 m BELOW every water level.
+   287→     The lake surface was always sliced at x=0 inside the gorge notch; at storm /
+   288→     overtop levels (24 m) that slice read as a giant waterfall off the edge of
+   289→     the world (the user's screenshot).
+   290→  2. LIVE STORM OVERTOPPED THE DAM (engine.ts setRain): live drive target was
+   291→     capped at 24.2 m — above CREST 23 — so merely toggling "Storm rain" in LIVE
+   292→     monitoring pushed the lake over the crest (silent dam-failure animation) and
+   293→     over the broken sill (edge waterfall). Moderate rain (23.15) also grazed over.
+   294→  3. CLOSED-GATE SILL BELOW SLIDER MAX: SPILL_CREST_CLOSED 22.2 < live slider max
+   295→     22.7, so a full reservoir leaked through visually-closed gates.
+   296→  4. BONUS BUG FOUND WHILE VERIFYING: triggerBreachErosion() refused breachT===null,
+   297→     but the overtopping scenario never arms breachT -> "Flood overtop" surged to
+   298→     24 m forever and NEVER eroded the dam (stuck at RESERVOIR SURCHARGING…).
+   299→     Also structural/piping never fired shake/audio/debris because
+   300→     triggerBreachErosion was only called from the overtop branch.
+   301→- Fixes:
+   302→  * terrain.ts buildStructBase: watertight upstream boundary plug (x<0.6 -> top 30 m,
+   303→    invisible, hidden inside the notch) — seals every achievable level (max 24.4).
+   304→  * terrain.ts bedAt: end sill that actually applies — floor += ss(2.6,0.4,x)*13.2
+   305→    inside the gorge band (fades out by wz 6.4) so the notch floor rises to ~28.6 m
+   306→    at the boundary and the shoreline tucks onto a natural rock ramp inside the notch.
+   307→  * terrain.ts: SPILL_CREST_CLOSED 22.2 -> 22.8 (above slider max 22.7).
+   308→  * props.ts: spillway sill monolith top 22.8; gate mesh 7.5 tall @ y 19.05
+   309→    (closed gate top = 22.8 exactly).
+   310→  * engine.ts: gate reset/open y 18.85 -> 19.05; setRain live cap 24.2 -> 22.6
+   311→    (LIVE monitoring can never overtop — failure remains an explicit WHAT-IF action).
+   312→  * engine.ts: triggerBreachErosion guard fixed (allows armed-null start),
+   313→    fireBreachFx() flag fires shake/audio/debris exactly once, now called both from
+   314→    the overtop branch AND when structural/piping breachT crosses zero in
+   315→    stepScenario; breachFx reset in runScenario()/reset().
+   316→- Browser-verified end to end (agent-browser):
+   317→  * Boot: lake ends on the new rock sill inside the notch; inflow rapids visible;
+   318→    top view clean; no console/page errors.
+   319→  * Storm rain (LIVE): level caps exactly 22.6, NO cascade, NO edge waterfall.
+   320→  * Live slider 100%: level 22.7 < sill 22.8 < crest 23 — no leak, no overtop.
+   321→  * Flood overtop: surcharge 24.0 -> cascade over crest (intended) -> breach NOW
+   322→    ERODES (0.14 -> 0.59 observed), outflow peaked 10,950 m3/s, flood sweeps the
+   323→    village, upstream notch stays sealed the whole time.
+   324→  * Dam break (structural): breachFx true + 14 debris chunks spawn (effects
+   325→    previously never fired), jet pours only through the visible gap.
+   326→  * Open gates: sill animates 22.8 -> 15.5, release flow begins, gates lift.
+   327→  * Reset: clean return to LIVE, drive pulls level back to 21.66.
+   328→  * tsc clean (src), eslint clean on changed files, dev.log 200s only.
+   329→
+   330→Stage Summary:
+   331→- The "waterfall at the edge of the world" is gone: the reservoir is now a closed
+   332→  basin at every operable level, with the shoreline hidden on a rock ramp inside
+   333→  the upstream gorge notch.
+   334→- LIVE mode semantics restored: storm rain = rain + high lake only; dam failure
+   335→  animations happen only via Dam break / Flood overtop / Pipe burst actions.
+   336→- Flood overtop now completes its full arc: surcharge -> crest cascade -> erosion
+   337→  -> breach -> flood wave. Structural/piping runs now fire the failure effects.
+   338→- Key files touched: src/lib/dam/terrain.ts, src/lib/dam/props.ts, src/lib/dam/engine.ts.
+   339→- Verification screenshots: tool-results/fix2_*.png.
+   340→
+   341→---
+   342→Task ID: iot-esp32-integration
+   343→Agent: Super Z (main agent)
+   344→Task: IoT-Integrated Dam Simulation & Flood Monitoring System (master prompt) — ESP32
+   345→telemetry pipeline (Phase 1 hardware handshake), 6-sensor network mapped into the 3D
+   346→twin with blinking threshold alerts, interactive zoom/pan situation map, data-driven
+   347→simulation, and Phase-2 multi-dam scaffolding.
+   348→
+   349→Work Log:
+   350→- sensors.ts (NEW): 6-sensor network contract — S1 reservoir stage (JSN-SR04T
+   351→  ultrasonic), S2 inflow velocity (Doppler), S3 dam-face pressure (transducer),
+   352→  S4 wall strain (vibrating-wire), S5 crest tilt (MEMS), S6 foundation seepage
+   353→  (piezometer); demo-world positions, warn/alarm thresholds, TelemetryPacket JSON
+   354→  schema, parsePacket validator (partial packets OK), evaluateStates, and an
+   355→  embedded simulator that synthesises physically-consistent values FROM the twin's
+   356→  solver state (level, inflow surge, depth-squared strain, breach-squared tilt,
+   357→  breach-boosted seepage + measurement noise).
+   358→- telemetry.ts (NEW): globalThis singleton ingestion store — per-dam channels
+   359→  (latest + 180-packet ring + node registry + twin state), hardware/simulator
+   360→  source state machine (hardware owns the channel while packets arrive; simulator
+   361→  takes over after 12 s silence), 1 Hz heartbeat loop (unref'd, HMR-safe), SSE
+   362→  subscriber registry, multi-dam namespaces (Phase 2 cascade-ready).
+   363→- API routes (NEW): POST/GET/OPTIONS /api/telemetry (ESP32 ingest with open CORS +
+   364→  ack with intervalMs; snapshot poll), POST /api/telemetry/state (browser twin
+   365→  pushes solver state every 2 s so the simulator mirrors it), GET
+   366→  /api/telemetry/stream (SSE: snapshot + ~1 Hz packet frames + 15 s pings).
+   367→- engine.ts: setSensors() 3D marker layer — floating buoys (reservoir sensors,
+   368→  re-floated every frame on the real solver surface via downsample lookup),
+   369→  pedestal nodes on dam wall/bedding (placed on structBase), canvas ID sprites,
+   370→  state beacons (ok emerald / warn amber pulsing / alarm red strobing + scaling),
+   371→  expanding alert rings on warn/alarm; updateSensors() in the tick loop;
+   372→  DamStats.inflow added; disposeSensorObject helper.
+   373→- minimap.tsx (NEW): interactive canvas situation map in the right column — static
+   374→  terrain layer rendered once from bedAt/terrainColor (client-only build to avoid
+   375→  SSR document access — fixed a "document is not defined" dev-overlay error),
+   376→  live water overlay from the solver downsample, dam/villages/gauges/inflow-arrow/
+   377→  sensor overlays with blinking alarm halos, real-km scale bar, wheel zoom around
+   378→  cursor + drag pan + +/−/reset buttons + dblclick reset, click sensor/village →
+   379→  focusOn 3D camera; ~10 Hz redraw.
+   380→- panels.tsx: new SENSOR NETWORK tab — ESP32 node link (source chip, node id,
+   381→  packet age, RSSI, supply), telemetry-driven twin toggle, 6 sensor cards (live
+   382→  value, hardware label, sparkline canvas, threshold bar W/A, OK/WARN/ALARM
+   383→  badges), ESP32 packet format docs, cascade-ready node registry; DataPanel now
+   384→  consumes real TelemetryView (fake MQTT demo removed); TopBar chip flips to
+   385→  ESP32 LIVE FEED when hardware owns the feed; UIStats.inflow.
+   386→- analysis.ts: computeRisk gained optional structural factor — strain/tilt/seepage
+   387→  normalised against alarm thresholds → NORMAL/ELEVATED/HIGH/EXTREME with WHY note.
+   388→- page.tsx: fake IoT demo removed; real SSE subscription (per-dam EventSource,
+   389→  snapshot+packet handlers, node registry upsert), twin-state POST loop (2 s),
+   390→  hardware stage steering (drivesTwin gate — hardware packets only, never
+   391→  simulator, never during scenarios; prevents feedback loop), sensorDefs memo →
+   392→  engine.setSensors, Minimap + GaugesPanel right column restructure, computeRisk
+   393→  structural wiring, engine re-create now restores current liveFrac (Fast-Refresh
+   394→  hardening).
+   395→- Verified end-to-end (agent-browser + curl):
+   396→  * curl POST hardware packet → 200 ack, snapshot shows source=hardware, node
+   397→    registered; partial packet {level} merges over previous channels; after 12 s
+   398→    silence source flips to simulator automatically; SSE emits snapshot + 1 Hz
+   399→    packets (both observed on the wire).
+   400→  * UI flips to ESP32 LIVE FEED + HARDWARE LIVE chips; S1 shows hardware value;
+   401→    S2 WARN at 2.9 m/s; alarm values (strain 465/tilt 2.72/seepage 32) → red
+   402→    blinking markers on map + alarm beacons/rings in 3D.
+   403→  * drivesTwin: hardware level 17.0/17.2/17.4 → engine drive target + liveFrac
+   404→    follow exactly (0.24/0.2667/0.293 observed); level pinned at 17.40 for a full
+   405→    30 s sustained stream (tagged engine, no remount, no drift).
+   406→  * Risk card: "Structural indicators EXTREME — channel at/over ALARM threshold"
+   407→    from hardware values alone.
+   408→  * Dam break regression: scenario runs with IoT layer live (PREPARING → BREACH
+   409→    FORMING % banner, SIMULATED SCENARIO gauge chip, timeline snapshots).
+   410→  * Minimap zoom ×2.1 (village + sensor labels appear), mobile 390px layout ok.
+   411→  * tsc clean (src), eslint clean, dev.log 200s only, no page errors.
+   412→
+   413→Stage Summary:
+   414→- Deliverable: DAMSAFE 3D now runs a complete Phase-1 IoT pipeline: ESP32 nodes
+   415→  POST JSON to /api/telemetry → store → SSE → twin (3D markers, sensor tab, map,
+   416→  risk engine, optional level steering). Without hardware, an embedded simulator
+   417→  mirrors the solver into the same pipeline so every consumer is exercised
+   418→  end-to-end (honestly labelled SIMULATED vs HARDWARE in the UI).
+   419→- Key files: src/lib/damsafe/{sensors,telemetry}.ts, src/app/api/telemetry/*
+   420→  (route, state, stream), src/lib/dam/engine.ts (sensor markers + inflow stat),
+   421→  src/components/damsafe/{minimap,panels}.tsx, src/app/page.tsx,
+   422→  src/lib/damsafe/analysis.ts (structural risk factor).
+   423→- Phase 2 readiness: per-dam namespaces + node registry + SSE topic filtering
+   424→  already in place; cascade dams plug in as additional dam ids without schema
+   425→  changes.
+   426→- Known sandbox artifact: headless rAF throttling slows the solver and canvas
+   427→  refresh during automated tests (sim ~0.1 s per wall-s); real browsers run at
+   428→  full speed. A leaked Fast-Refresh context can double-post twin state during
+   429→  live HMR editing in dev — harmless to solver integrity, disappears on reload.
+   430→
+   431→---
+   432→Task ID: world-v2-powerhouse-town-sensors
+   433→Agent: Super Z (main agent)
+   434→Task: Physical-model expansion per user reference image — sensors kept ON the dam
+   435→crest line and ON the earth at the base, a hydroelectric turbine/powerhouse as
+   436→part of the dam, dam structure completed into both abutments (sides were cut
+   437→off / water visible through them), and an open-world city map enclosing the
+   438→dam (game-style), plus any additional useful sensors at best locations.
+   439→
+   440→Work Log:
+   441→- terrain.ts: (a) abutment-shoulder term — near the dam (|x-112|<30) the valley
+   442→  walls now rise just above crest (+min(t,0.9)*9) so the monoliths key into
+   443→  solid rock and the reservoir shoreline tucks against the flanks (fixes the
+   444→  sliced-water-edge look at the dam ends); (b) downstream valley widening
+   445→  (w0 += (x-112)*0.34) — the gorge opens into a broad floodplain where the
+   446→  river town stands; (c) terrainColor: warm granite base + scrub-vegetation
+   447→  term on mid slopes (smoothstep 0.95→0.35 slope, fade by b 42) so gorge walls
+   448→  no longer read as bare gray.
+   449→- props.ts: outer monoliths extended z ±38 → ±46 (ends buried in the raised
+   450→  flanks), crest road/railings/lamps extended to ±46/±42, stepped abutment
+   451→  gallery blocks at both flank contacts, stain band widened to 88.
+   452→- world.ts (NEW ~700 lines): buildPowerhouse() — reservoir intake tower with
+   453→  trash racks + gantry + service bridge + submerged feed conduit, two steel
+   454→  penstocks down the downstream face (collars), powerhouse hall at the toe with
+   455→  open downstream bay showing 2 turbine-generator units (spiral casing,
+   456→  generator barrel, 4-spoke flywheel ROTORS that spin ∝ discharge), tailrace
+   457→  guide walls, transformer yard + switch gantry, 4 lattice pylons + 9 catenary
+   458→  cables to the town substation; buildTown() — 10-street grid on both banks,
+   459→  ~150-window-textured instanced buildings + roof slabs (deterministic scatter,
+   460→  slope/street/river filters), clock tower with 4 canvas clock faces + plaza,
+   461→  water tower, market canopy, football pitch (canvas markings), temple, park
+   462→  grove + benches, instanced streetlights, farmland patches, light-industry
+   463→  sheds near the dam; buildFarTerrain() — 4 visual-only patches beyond the
+   464→  solver domain (valley continuations + mountain ring via fbm farBed, vertex-
+   465→  colored) replacing the flat surround plane.
+   466→- sensors.ts: network expanded 6 → 16 channels. New: S7/S8 heel-uplift
+   467→  piezometers (foundation, on the earth at the dam base), S9/S11 strain array,
+   468→  S10 tilt array, S12 spillway gate position, S13 turbine vibration,
+   469→  S14 penstock flow (face-mounted via new dy offset), S15 tailrace stage,
+   470→  S16 weather station (rain mm/h). SensorKind → 'reservoir' | 'crest' |
+   471→  'foundation' | 'turbine' | 'weather'; new channels added to SensorValues,
+   472→  CHANNEL_KEY, parsePacket pick list, and the embedded simulator (uplift grows
+   473→  with head + breach, gatePos derived from qOut, turbFlow = min(qOut*0.42,26)).
+   474→- engine.ts: buildSensorMarker rewritten per kind (buoy / crest pedestal /
+   475→  foundation vault+riser / turbine node+whip / weather mast with anemometer
+   476→  cups + vane) with per-kind rest-elevation rules (crest = structBase top,
+   477→  others = bedAt + dy); powerhouse rotors spin at 1.1+min(qOut,40)*0.42 rad/s;
+   478→  DamStats.powerMW (demo turbine discharge × head physics); far terrain wired
+   479→  in; maxDistance 640; camera presets retuned (overview high diorama 198,98,110
+   480→  → 102,8,2; new 'town' preset; overview/impact/town clear the new ring).
+   481→- glsl.ts: water shader — ripple amp 0.055→0.075, shoreline whiteness 0.30→0.18,
+   482→  sun specular tight lobe 220/3.2 → 320/1.5 + broad 24/0.16 → 28/0.10 (the
+   483→  mirror-flat driven lake was blowing out into white slashes along far shores).
+   484→- panels.tsx: UIStats.powerMW; new "Powerhouse generation" panel (real-MW via
+   485→  qScale × heightM/13, turbine discharge, units online / "curtailed — flood
+   486→  release" with intakes-shut generation at qOut>60); packet-format docs now
+   487→  list all 16 channels; sensor panel title uses SENSORS.length; TwinPanel
+   488→  channel summary updated. page.tsx: 'Town' camera button.
+   489→- Verified: tsc + eslint clean; full 16-channel hardware packet POST → ack +
+   490→  snapshot (source=hardware, node registered); UI sensor tab shows
+   491→  "16 DEPLOYED" cards; breach scenario end-to-end (PREPARING → BREACH FORMING
+   492→  34% → 80%, outflow 5,652 m³/s at dam, G1 257 m³/s / 11.2 m/s, powerhouse
+   493→  935 MW → "curtailed — flood release", hydrograph rising); solver probes
+   494→  clean (no NaN; wet cells = reservoir+river); screenshots: overview (dam keyed
+   495→  into both flanks, reservoir intact, town + river + bridge + pylons), dam
+   496→  face (crest sensor array, intake tower, powerhouse), town close-up (clock
+   497→  tower, market, pitch, water tower), sensors tab, breach/flood frames.
+   498→- Known sandbox notes: headless rAF throttling slows sim (breach tau 15 sim-s
+   499→  takes minutes of wall time; real browsers full speed); timeScale > ~2.2
+   500→  exceeds the 14-substep CFL clamp and destabilises the solver (avoid in
+   501→  tests; UI max is 4 on scenario panel only — substep clamp keeps 2.2 safe);
+   502→  MeshDepthMaterial VALIDATE_STATUS console errors are a headless SwiftShader
+   503→  shadow-pass quirk — shadows render correctly.
+   504→
+   505→Stage Summary:
+   506→- Deliverable: DAMSAFE 3D now a complete open-world dam complex — full gravity
+   507→  dam keyed into rock abutments, working hydro powerhouse (spinning turbines,
+   508→  live MW), 16-sensor IoT network mapped 1:1 into the 3D twin (crest line +
+   509→  earth/foundation + powerhouse + weather), river town with landmarks, and a
+   510→  fogged mountain horizon. ESP32 pipeline unchanged and 16-channel ready.
+   511→- Key files: src/lib/dam/world.ts (NEW), terrain.ts, props.ts, engine.ts,
+   512→  glsl.ts, src/lib/damsafe/sensors.ts, src/components/damsafe/panels.tsx,
+   513→  src/app/page.tsx.
+   514→- Next candidates: GLB/GLTF reference-model loader (user offered real 3D
+   515→  assets — drop into public/models + loader prop), town flood-damage states
+   516→  for instanced buildings, Phase 2 cascade dams.
+   517→
+   518→---
+   519→Task ID: W1
+   520→Agent: Super Z (main)
+   521→Task: Restyle the DAMSAFE world to match the user's reference image — towering mountain amphitheater enclosing the valley, dense ring-shaped city with highway interchanges, turquoise reservoir.
+   522→
+   523→Work Log:
+   524→- terrain.ts: downstream valley widened (widen 0.34 → 0.44) for the ring city; canyon walls steepened/two-stage (min(t*1.02, 24.5) + (t-24)*0.55) so in-domain cliffs climb toward the far ring; scrub band extended to b≤50; base rock darkened to warm granite (0.325/0.29/0.246 + n + strata); new high-rock band smoothstep(26,60,b) with large strata banding (0.265/0.248/0.226 + band*0.058) — kills the "snow field" blow-out.
+   525→- glsl.ts: reservoir tint turquoise — shallow (0.052,0.402,0.512), deep (0.006,0.145,0.308), in-scatter teal-shift.
+   526→- world.ts far terrain: farBed rewritten as a 4-side amphitheater — north wall towers (rise ≤130 m, peaks to ~260 m), upstream headwall hugs the lake, south rim capped at 55 m so the default aerial camera sees into the bowl, downstream valley runs 40 m before the east wall; ridgeN ridged multifractal at 0.02 freq (kept below mesh sampling rate — fixes triangular-spike aliasing from the first attempt); patches enlarged to E=260 with 60x100 / 78x64 segments.
+   527→- world.ts ring city: TOWN_C (146,0); 3 ring boulevards (r 21/31.5/42) drawn with profileRibbon arched over the river channel (deck = bed(x,0)+3.6..4.75) + deckPiers — reads as 3 bridges; 6 radial avenues; riverside promenades; buildExpressway — EXP_A bank highway + EXP_B river-crossing signature highway at ~5.5 m on pylons (skipped over channel), edge beams, instanced centre dashes, 4 down-ramps + RAMP_AB flyover connector (spaghetti-junction read); building scatter rewritten — 3-class instanced districts (low 2.8-6.2 m / mid-rise 6.8-13 m / glass towers 13.5-23 m clustered downtown via core weight), ~2× density of the old grid; 5 landmark towers (24/21/18/19/16 m) with crowns + red aviation beacons; ~300 instanced city trees (promenade rows + block gaps) with per-instance greens; streetlights extended to ring boulevards; CLEAR_SEGS/CLEAR_RECTS clearance network keeps buildings off all paths/landmarks/farms/sheds.
+   528→- engine.ts: default camera (238,132,146) + overview preset (256,148,72)→(94,8,0), top 245 m, town/impact retuned; fog 470/2300 day (storm 250/1150); maxDistance 980; shadow frustum ±120/far 1150; sky turbidity 4.6, rayleigh 2.2; lighting regraded — sun 0xffd9a8 @2.35 flipped to camera side (0.46,0.6,0.3) so near slopes read warm granite while shadows go cool (hemi 0.32, env 0.22) — fixes the icy-white mountain look (albedo tweaks alone couldn't beat ACES).
+   529→- Verified: tsc + eslint clean (src); browser screenshots overview/town/dam-face; scenario run (structural breach drive) + openGates physics correct (no spill below sill 22.8); reset OK; zero console errors.
+   530→- Known notes: breach formation is wall-clock slow in the throttled headless browser (unchanged from previous session); flood physics untouched — widen only moves dry walls outward, gauges/channel intact.
+   531→
+   532→Stage Summary:
+   533→- Deliverable: world now matches the reference — turquoise reservoir hugged by a jagged peak amphitheater, dam + powerhouse at the valley head, and a dense open-world ring city (boulevards, arched river bridges, elevated interchange, glass skyline, trees) filling the valley floor.
+   534→- Key files: src/lib/dam/terrain.ts, src/lib/dam/glsl.ts, src/lib/dam/world.ts, src/lib/dam/engine.ts.
+   535→- Next candidates: flood-damage states for instanced buildings, GLB reference-model loader, Phase 2 cascade dams.
+   536→
+   537→---
+   538→Task ID: W2-smooth-mountains
+   539→Agent: Super Z (main)
+   540→Task: User refinement on the W1 world restyle — "i wanted this, remove the jagged mountains"
+   541→(new reference: same ring-city bowl composition but with smooth, rolling, vegetated hills
+   542→instead of the towering jagged granite peaks).
+   543→
+   544→Work Log:
+   545→- world.ts farBed: DELETED ridgeN (ridged multifractal — the sharp crest-line generator);
+   546→  rise caps cut ~60% (north 130→72, upstream 125→60, downstream 125→70 with a 34 m flat
+   547→  run-out, south 55→38) and each wall now eases in with a smooth exponential instead of a
+   548→  linear ramp; peaks shaped by broad fbm domes (m1² mask, 0.52..1.10) + gentle undulation —
+   549→  rounded hill silhouettes, max far-rim ~100-120 m vs the old ~260 m spikes.
+   550→- terrain.ts bedAt: in-domain two-stage cliff walls (min(t*1.02,24.5)+(t-24)*0.55, rough
+   551→  0.75+0.5) replaced with a smooth exponential grade (1-exp(-t/17))*21, rough 0.85+0.3 —
+   552→  rolling slopes; wall rockiness amp 5.0→2.8. Solver untouched (walls are dry land; channel,
+   553→  widen, gauges, abutment shoulders, sill all unchanged).
+   554→- terrainColor: scrub band extended up-slope (slope 0.95→1.15, b 50/30→56/30, 0.6→0.72 mix)
+   555→  and the high-rock band raised (26/60→36/78) so the hills read green-brown; SAND term
+   556→  (meant for the incised channel bed) now gated to the channel band
+   557→  *smoothstep(16,10,|z|)* — it used to paint the ENTIRE downstream floodplain and its
+   558→  far-terrain continuation desert-tan (b 4-8 < 9.2 everywhere downstream).
+   559→- FAR-SEAM FIX (exposed by removing the peaks that hid it): the domain mesh samples bedAt
+   560→  at CELL CENTERS while far patches sampled the analytic edge — a half-cell offset opened
+   561→  hairline cracks (white streaks) along every domain edge, plus T-junction cracks between
+   562→  far patches with different vertex spacings (white specks at distance). farPatch now
+   563→  returns top + perimeter SKIRT (7 m terrain-colored dropped ribbon, DoubleSide) and every
+   564→  patch extends 2.5 m INTO the domain sunk 0.8 m (tucked-under apron; side patches inset in
+   565→  x so upstream/downstream patches own the corners — no overlaps, no z-fighting).
+   566→- farPatch return type THREE.Mesh → THREE.Group (top+skirt); caught and fixed a
+   567→  self-introduced bug mid-edit (dropped geo color attribute + computeVertexNormals for the
+   568→  top surface → far terrain rendered black for one reload).
+   569→- Verified in browser (1440x810): wide world view — smooth bowl, turquoise lake, green
+   570→  plain, zero streaks/specks; Overview + Dam face + Town presets compose correctly;
+   571→  dam-break scenario launched (level drive +5.47 m/hr, risk 35→51 HIGH, breachT forming),
+   572→  reset returns cleanly; no console/page errors; tsc (src) + eslint clean.
+   573→- Known: headless rAF throttling makes the sandbox scenario take minutes of wall time per
+   574→  phase (unchanged artifact); real browsers run at full speed.
+   575→
+   576→Stage Summary:
+   577→- Deliverable: DAMSAFE 3D world now matches the user's refined reference — a city bowl
+   578→  cradled in SMOOTH rolling, vegetated hills (jagged mountains removed), turquoise
+   579→  reservoir at the head, dense ring city + dam complex on the valley floor, with the
+   580→  far-terrain seams (streaks + specks) permanently sealed via apron overlap + skirts.
+   581→- Key files: src/lib/dam/world.ts (farBed/farPatch/buildFarTerrain), src/lib/dam/terrain.ts
+   582→  (bedAt walls, rockiness, terrainColor scrub/high/sand).
+   583→- Physics regression-clean: solver untouched; scenario launch/drive/breach-arming/reset all
+   584→  verified live.
+   585→
+   586→---
+   587→Task ID: 3
+   588→Agent: Super Z (main)
+   589→Task: Rebuild the world as a CIRCULAR MAP per the user's latest reference image ("u didnt make it like the image, need a circular map plz") — round bowl valley, ring city, turquoise reservoir, smooth (non-jagged) mountains.
+   590→
+   591→Work Log:
+   592→- terrain.ts: replaced linear downstream valley widening with a CIRCULAR city bowl —
+   593→  exported BOWL_CX=146 / BOWL_R=47; rim = (1-exp(-(rC-BOWL_R)/20))*30*rough*rimIn
+   594→  (fades in x>DAM_X+2..+30 so reservoir walls + dam abutments stay intact upstream);
+   595→  river-corridor walls now suppressed INSIDE the bowl (inBowl smoothstep 40.5→48.5)
+   596→  so the city floor is open, and take over again outside the bowl (gorge through the rim);
+   597→  removed old widen=(x-DAM_X)*0.44 term; added reservoir BULGE
+   598→  12*exp(-((x-64)/22)^2)*smoothstep(104,88,x) so the lake reads as a rounded basin
+   599→  (half-width 44→46.5→50.5→38.5→35.5 m along its length).
+   600→- world.ts: TOWN_C now = bowl centre; RING boulevards expanded 3→5 rings
+   601→  (r 17.5/24.5/31.5/38.5/45.5, widths up to 4.2 m, lighter 0x585862 asphalt so arcs read
+   602→  from the air), RING_HALF 1.72→2.0 (~230° wrap); radial avenues 6→8 rays (r 15.5→47.5);
+   603→  BUILDING SCATTER rewritten from rectangular grid to CONCENTRIC RING DISTRICTS:
+   604→  9 building rings r=16..44, tangential orientation (rot=a+π/2+jitter), towers weighted
+   605→  to inner rings / low-rise terraces outside; ring-boulevard tree lines added;
+   606→  rim-clipped landmarks/farms moved inside r<46 (towers 183,33→181,29 & 186,-36→181,-31,
+   607→  farms recentered); TOWN_STREETS right-bank trimmed to x≤186.
+   608→- world.ts farBed: added CIRCULAR rim continuation beyond the solver domain (x>104,
+   609→  rC>BOWL_R): phased in over 1.5→32 m past each domain edge (seam stays flush — no
+   610→  cliffs), carved by river gorge sstep(10,26,|z|) so the waterway runs to the horizon;
+   611→  combined with existing directional dome terms → continuous rounded amphitheater.
+   612→- glsl.ts water: shallow (0.052,0.402,0.512)→(0.055,0.438,0.522), deep →(0.010,0.175,0.332),
+   613→  in-scatter ambient bumped — vivid turquoise like the reference lake.
+   614→- engine.ts CAM_PRESETS: overview → (312,178,76)→target(112,2,0) reference-like frontal
+   615→  aerial; top → (126,335,6) full-circle top-down (z offset 6 avoids OrbitControls pole
+   616→  instability of z=0.01); shadow/fog/solver untouched.
+   617→- props.ts: 7 hand-placed shoreline trees that stood IN the reservoir moved onto the
+   618→  south shore slopes (|z| 43-45).
+   619→- Verified: scripts/check_bowl.ts transects (floor dish ≤1.8 m rise r30→36; rim 20-47 m
+   620→  at r=68 all around; river exit bed 8.7→2.5 m while flanks climb to 38 m; abutments
+   621→  27-31 m > crest 23; 0 building spots on bad ground); live browser screenshots:
+   622→  Top view shows the full circular map (round lake, ring roads + radial avenues,
+   623→  smooth green rim, river corridor through the centre); Overview matches reference
+   624→  composition; Reset/Storm/Town/Top handlers verified; tsc(src) clean; production build ✓.
+   625→- Note: agent-browser element refs go stale after React re-renders (~2 s stats ticks) —
+   626→  clicking via JS dispatch on text-matched buttons is the reliable path in tests.
+   627→
+   628→Stage Summary:
+   629→- The world is now a CIRCULAR MAP: closed bowl valley centred on (146,0) with the dam
+   630→  notched into its upstream rim, rounded turquoise reservoir, ring-boulevard city with
+   631→  tangential ring districts and radial avenues, river + expressway exiting through a
+   632→  gorge in the downstream rim, and a smooth (no jagged peaks) mountain wall that continues
+   633→  seamlessly into the far-terrain ring. Solver/scenario physics untouched.
+   634→- Key files: src/lib/dam/terrain.ts (BOWL_CX/BOWL_R + bedAt), src/lib/dam/world.ts
+   635→  (ring layout + farBed), src/lib/dam/engine.ts (cameras), src/lib/dam/glsl.ts (water),
+   636→  src/lib/dam/props.ts (shore trees).
+   637→
