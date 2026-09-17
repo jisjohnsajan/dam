@@ -93,13 +93,13 @@ export function bedAt(x: number, z: number): number {
     floor -= 2.2 * Math.exp(-(wz * wz) / 100);
   }
 
-  // canyon walls rising from the channel edge — steep cliff face that keeps
-  // climbing toward the domain edge; the far-terrain ring continues the same
-  // walls upward into full towering peaks
+  // valley walls — SMOOTH rolling slopes (no jagged cliffs): a soft
+  // exponential grade that eases out toward the domain edge, where the
+  // far-terrain ring continues it as rounded, vegetated hills
   if (wz > w0) {
     const t = wz - w0;
-    const rough = 0.75 + 0.5 * fbm(x * 0.08 + 3.7, z * 0.08, 3);
-    floor += (Math.min(t * 1.02, 24.5) + Math.max(t - 24, 0) * 0.55) * rough;
+    const rough = 0.85 + 0.3 * fbm(x * 0.08 + 3.7, z * 0.08, 3);
+    floor += (1 - Math.exp(-t / 17)) * 21 * rough;
   }
 
   // Abutment shoulders — near the dam the valley walls rise just above the
@@ -131,8 +131,9 @@ export function bedAt(x: number, z: number): number {
     }
   }
 
-  // rockiness
-  const amp = wz > w0 ? 5.0 : 0.55;
+  // rockiness — kept subtle on the walls so the slopes read as smooth turf
+  // and weathered rock, not craggy rubble
+  const amp = wz > w0 ? 2.8 : 0.55;
   floor += (fbm(x * 0.11 + 7.3, z * 0.11 + 2.1, 4) - 0.5) * amp;
 
   return Math.max(floor, 2.5);
@@ -303,16 +304,20 @@ export function terrainColor(
   g = g * (1 - grass) + (0.30 + 0.08 * n2) * grass;
   bl = bl * (1 - grass) + (0.115 + 0.03 * n2) * grass;
 
-  // scrub vegetation clinging to the mid slopes — keeps the gorge walls from
-  // reading as bare gray concrete; the tropics never leave rock naked
-  const scrub = smoothstep(0.95, 0.35, slope) * smoothstep(50, 30, b) * (0.3 + 0.7 * n);
-  const sv = scrub * 0.6;
+  // scrub vegetation clothing the slopes — the hills around the city bowl are
+  // green and rounded (reference image), so the band reaches well up-slope
+  // and tolerates moderate gradients
+  const scrub = smoothstep(1.15, 0.4, slope) * smoothstep(56, 30, b) * (0.3 + 0.7 * n);
+  const sv = scrub * 0.72;
   r = r * (1 - sv) + (0.23 + 0.04 * n2) * sv;
   g = g * (1 - sv) + (0.29 + 0.05 * n2) * sv;
   bl = bl * (1 - sv) + (0.16 + 0.03 * n2) * sv;
 
-  // sandy channel bed
-  const sand = smoothstep(0.6, 1.8, 1.8 - slope) * smoothstep(10.8, 9.2, b) * (x > DAM_X - 4 ? 1 : 0);
+  // sandy channel bed — restricted to the incised channel band (gaussian cut
+  // |z| ≲ 11) so the downstream floodplain — and its far-terrain continuation
+  // beyond the domain — reads as vegetated plain, not desert
+  const sand = smoothstep(0.6, 1.8, 1.8 - slope) * smoothstep(10.8, 9.2, b)
+    * (x > DAM_X - 4 ? 1 : 0) * smoothstep(16, 10, Math.abs(z));
   r = r * (1 - sand) + 0.47 * sand;
   g = g * (1 - sand) + 0.41 * sand;
   bl = bl * (1 - sand) + 0.30 * sand;
@@ -325,9 +330,9 @@ export function terrainColor(
     bl = bl * (1 - s) + 0.175 * s;
   }
 
-  // sun-bleached rock higher up — kept mid-tone granite so towering peaks
-  // read as layered brown-gray battlements, never as snow fields
-  const high = smoothstep(26, 60, b);
+  // sun-bleached rock only on the uppermost domes — mid slopes stay scrubby
+  // green-brown, so the smooth hills never read as bare battlements
+  const high = smoothstep(36, 78, b);
   const band = 0.5 + 0.5 * Math.sin(b * 0.55 + n2 * 4.2); // large rock strata
   r = r * (1 - high) + (0.265 + 0.058 * band + 0.026 * n) * high;
   g = g * (1 - high) + (0.248 + 0.046 * band + 0.022 * n) * high;

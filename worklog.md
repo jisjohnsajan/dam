@@ -533,3 +533,52 @@ Stage Summary:
 - Deliverable: world now matches the reference — turquoise reservoir hugged by a jagged peak amphitheater, dam + powerhouse at the valley head, and a dense open-world ring city (boulevards, arched river bridges, elevated interchange, glass skyline, trees) filling the valley floor.
 - Key files: src/lib/dam/terrain.ts, src/lib/dam/glsl.ts, src/lib/dam/world.ts, src/lib/dam/engine.ts.
 - Next candidates: flood-damage states for instanced buildings, GLB reference-model loader, Phase 2 cascade dams.
+
+---
+Task ID: W2-smooth-mountains
+Agent: Super Z (main)
+Task: User refinement on the W1 world restyle — "i wanted this, remove the jagged mountains"
+(new reference: same ring-city bowl composition but with smooth, rolling, vegetated hills
+instead of the towering jagged granite peaks).
+
+Work Log:
+- world.ts farBed: DELETED ridgeN (ridged multifractal — the sharp crest-line generator);
+  rise caps cut ~60% (north 130→72, upstream 125→60, downstream 125→70 with a 34 m flat
+  run-out, south 55→38) and each wall now eases in with a smooth exponential instead of a
+  linear ramp; peaks shaped by broad fbm domes (m1² mask, 0.52..1.10) + gentle undulation —
+  rounded hill silhouettes, max far-rim ~100-120 m vs the old ~260 m spikes.
+- terrain.ts bedAt: in-domain two-stage cliff walls (min(t*1.02,24.5)+(t-24)*0.55, rough
+  0.75+0.5) replaced with a smooth exponential grade (1-exp(-t/17))*21, rough 0.85+0.3 —
+  rolling slopes; wall rockiness amp 5.0→2.8. Solver untouched (walls are dry land; channel,
+  widen, gauges, abutment shoulders, sill all unchanged).
+- terrainColor: scrub band extended up-slope (slope 0.95→1.15, b 50/30→56/30, 0.6→0.72 mix)
+  and the high-rock band raised (26/60→36/78) so the hills read green-brown; SAND term
+  (meant for the incised channel bed) now gated to the channel band
+  *smoothstep(16,10,|z|)* — it used to paint the ENTIRE downstream floodplain and its
+  far-terrain continuation desert-tan (b 4-8 < 9.2 everywhere downstream).
+- FAR-SEAM FIX (exposed by removing the peaks that hid it): the domain mesh samples bedAt
+  at CELL CENTERS while far patches sampled the analytic edge — a half-cell offset opened
+  hairline cracks (white streaks) along every domain edge, plus T-junction cracks between
+  far patches with different vertex spacings (white specks at distance). farPatch now
+  returns top + perimeter SKIRT (7 m terrain-colored dropped ribbon, DoubleSide) and every
+  patch extends 2.5 m INTO the domain sunk 0.8 m (tucked-under apron; side patches inset in
+  x so upstream/downstream patches own the corners — no overlaps, no z-fighting).
+- farPatch return type THREE.Mesh → THREE.Group (top+skirt); caught and fixed a
+  self-introduced bug mid-edit (dropped geo color attribute + computeVertexNormals for the
+  top surface → far terrain rendered black for one reload).
+- Verified in browser (1440x810): wide world view — smooth bowl, turquoise lake, green
+  plain, zero streaks/specks; Overview + Dam face + Town presets compose correctly;
+  dam-break scenario launched (level drive +5.47 m/hr, risk 35→51 HIGH, breachT forming),
+  reset returns cleanly; no console/page errors; tsc (src) + eslint clean.
+- Known: headless rAF throttling makes the sandbox scenario take minutes of wall time per
+  phase (unchanged artifact); real browsers run at full speed.
+
+Stage Summary:
+- Deliverable: DAMSAFE 3D world now matches the user's refined reference — a city bowl
+  cradled in SMOOTH rolling, vegetated hills (jagged mountains removed), turquoise
+  reservoir at the head, dense ring city + dam complex on the valley floor, with the
+  far-terrain seams (streaks + specks) permanently sealed via apron overlap + skirts.
+- Key files: src/lib/dam/world.ts (farBed/farPatch/buildFarTerrain), src/lib/dam/terrain.ts
+  (bedAt walls, rockiness, terrainColor scrub/high/sand).
+- Physics regression-clean: solver untouched; scenario launch/drive/breach-arming/reset all
+  verified live.

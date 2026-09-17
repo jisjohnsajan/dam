@@ -1097,20 +1097,9 @@ export function buildTown(): { group: THREE.Group } {
 
 // ============================================================ FAR TERRAIN
 // Visual-only continuation of the world beyond the solver domain: the valley
-// runs on, then a towering amphitheater of jagged granite peaks closes the
-// horizon — the reservoir hugs between the upstream range like a fjord head.
-function ridgeN(px: number, pz: number, oct: number): number {
-  // 0..1 ridged multifractal — inverted abs(noise) gives sharp crest lines
-  let s = 0, a = 0.5, f = 1;
-  for (let i = 0; i < oct; i++) {
-    const n = 1 - Math.abs(2 * fbm(px * f, pz * f, 2) - 1);
-    s += a * n * n;
-    f *= 2.13;
-    a *= 0.5;
-  }
-  return Math.min(s * 1.4, 1);
-}
-
+// runs on, then a broad amphitheater of SMOOTH ROLLING HILLS closes the
+// horizon — the user asked for NO jagged mountains, so every wall is a soft
+// exponential dome modulated by gentle fbm (no ridged-noise crest lines).
 function farBed(x: number, z: number): number {
   const cx = clamp(x, 0.2, LX - 0.2);
   const cz = clamp(z, -LZ / 2 + 0.2, LZ / 2 - 0.2);
@@ -1120,29 +1109,33 @@ function farBed(x: number, z: number): number {
   const dDown = Math.max(x - LX, 0);
   const dNorth = Math.max(-LZ / 2 - z, 0);
   const dSouth = Math.max(z - LZ / 2, 0);
-  // amphitheater: the north wall (behind the dam) towers over the reservoir,
-  // the upstream headwall hugs the lake between peaks, the south rim stays
-  // lower so the default aerial camera looks over it into the bowl, and the
-  // valley runs on downstream before the eastern wall closes the horizon
+  // rolling amphitheater — each wall eases in exponentially and caps far below
+  // the old jagged 260 m peaks: the north wall (behind the dam) is tallest
+  // (~85 m over the valley), the upstream headwall ~65 m, the downstream east
+  // wall ~75 m, and the south rim stays low (~40 m) so the default aerial
+  // camera still looks over it into the city bowl
   const rise = Math.max(
-    dUp > 0 ? Math.min(7 + dUp * 1.5, 125) : 0,
-    dDown > 0 ? Math.min(Math.max(dDown - 40, 0) * 1.4, 125) : 0,
-    dNorth > 0 ? Math.min(5 + dNorth * 2.1, 130) : 0,
-    dSouth > 0 ? Math.min(9 + dSouth * 1.0, 55) : 0,
+    dUp > 0 ? (1 - Math.exp(-dUp / 55)) * 60 : 0,
+    dDown > 0 ? (dDown > 34 ? (1 - Math.exp(-(dDown - 34) / 60)) * 70 : 0) : 0,
+    dNorth > 0 ? (1 - Math.exp(-dNorth / 48)) * 72 : 0,
+    dSouth > 0 ? (1 - Math.exp(-dSouth / 70)) * 38 : 0,
   );
   if (rise > 0) {
-    // frequencies kept below the terrain mesh sampling rate — anything finer
-    // aliases into ugly triangular spikes
-    const r1 = ridgeN(x * 0.02 + 7.7, z * 0.02 + 2.9, 3); // major crests
-    const r2 = fbm(x * 0.011 + 1.2, z * 0.011 + 8.8, 3); // massifs & passes
-    const peaks = 0.42 + 1.15 * Math.pow(r1, 1.5);
-    h += rise * peaks * (0.55 + 0.75 * r2);
-    h += (fbm(x * 0.035 + 3.3, z * 0.035 + 6.1, 2) - 0.5) * Math.min(3 + rise * 0.16, 9);
+    // smooth fbm only — frequencies kept well below the terrain mesh sampling
+    // rate (anything finer aliases into triangular spikes); the squared massif
+    // mask gives broad dome-like ridges instead of sharp crests
+    const m1 = fbm(x * 0.012 + 7.7, z * 0.012 + 2.9, 3); // broad massifs
+    const m2 = fbm(x * 0.027 + 1.2, z * 0.027 + 8.8, 3); // gentle undulation
+    const hills = 0.52 + 0.58 * m1 * m1; // 0.52..1.10 — rounded domes
+    h += rise * hills * (0.7 + 0.55 * m2);
+    h += (fbm(x * 0.033 + 3.3, z * 0.033 + 6.1, 2) - 0.5) * Math.min(2.2 + rise * 0.05, 5.5);
   }
   return h;
 }
 
-function farPatch(x0: number, x1: number, z0: number, z1: number, sx: number, sz: number): THREE.Mesh {
+function farPatch(
+  x0: number, x1: number, z0: number, z1: number, sx: number, sz: number, sink = 0,
+): THREE.Group {
   const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0, sx, sz);
   geo.rotateX(-Math.PI / 2);
   geo.translate((x0 + x1) / 2, 0, (z0 + z1) / 2);
@@ -1153,7 +1146,7 @@ function farPatch(x0: number, x1: number, z0: number, z1: number, sx: number, sz
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const z = pos.getZ(i);
-    const y = farBed(x, z);
+    const y = farBed(x, z) - sink;
     pos.setY(i, y);
     const e = 3.2;
     const sl = Math.hypot(farBed(x + e, z) - farBed(x - e, z), farBed(x, z + e) - farBed(x, z - e)) / (2 * e);
@@ -1163,14 +1156,60 @@ function farPatch(x0: number, x1: number, z0: number, z1: number, sx: number, sz
     colors[i * 3 + 1] = col.g;
     colors[i * 3 + 2] = col.b;
   }
+
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(
-    geo,
-    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0, envMapIntensity: 0.18 }),
-  );
-  mesh.receiveShadow = false;
-  return mesh;
+
+  // Perimeter skirt: neighbouring patches share edge heights but have different
+  // vertex spacings, so T-junction interpolation opens hairline cracks that
+  // read as white specks from afar. Dropping a terrain-colored ribbon around
+  // every edge hides any gap, whatever the viewing angle.
+  const SKIRT = 7;
+  const gridW = sx + 1;
+  const gridH = sz + 1;
+  const boundary: number[] = [];
+  for (let ix = 0; ix < gridW; ix++) boundary.push(ix); // north row (z0)
+  for (let iz = 1; iz < gridH; iz++) boundary.push(iz * gridW + gridW - 1); // east col
+  for (let ix = gridW - 2; ix >= 0; ix--) boundary.push((gridH - 1) * gridW + ix); // south row
+  for (let iz = gridH - 2; iz >= 1; iz--) boundary.push(iz * gridW); // west col
+  const baseCount = pos.count;
+  const skirtVerts = boundary.length * 2;
+  const posArr = new Float32Array((baseCount + skirtVerts) * 3);
+  posArr.set(pos.array as Float32Array);
+  const colArr = new Float32Array((baseCount + skirtVerts) * 3);
+  colArr.set(colors);
+  for (let k = 0; k < boundary.length; k++) {
+    const b = boundary[k];
+    for (let c = 0; c < 3; c++) {
+      posArr[(baseCount + k * 2) * 3 + c] = posArr[b * 3 + c];
+      colArr[(baseCount + k * 2) * 3 + c] = colArr[b * 3 + c];
+      posArr[(baseCount + k * 2 + 1) * 3 + c] = posArr[b * 3 + c];
+      colArr[(baseCount + k * 2 + 1) * 3 + c] = colArr[b * 3 + c];
+    }
+    posArr[(baseCount + k * 2 + 1) * 3 + 1] -= SKIRT;
+  }
+  const idx = new Uint32Array(boundary.length * 6);
+  for (let k = 0; k < boundary.length; k++) {
+    const k2 = (k + 1) % boundary.length;
+    const tA = baseCount + k * 2, bA = tA + 1, tB = baseCount + k2 * 2, bB = tB + 1;
+    idx[k * 6] = tA; idx[k * 6 + 1] = tB; idx[k * 6 + 2] = bA;
+    idx[k * 6 + 3] = bA; idx[k * 6 + 4] = tB; idx[k * 6 + 5] = bB;
+  }
+  const skirtGeo = new THREE.BufferGeometry();
+  skirtGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  skirtGeo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+  skirtGeo.setIndex(new THREE.BufferAttribute(idx, 1));
+  skirtGeo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 0.97, metalness: 0, envMapIntensity: 0.18, side: THREE.DoubleSide,
+  });
+  const top = new THREE.Mesh(geo, mat);
+  const skirt = new THREE.Mesh(skirtGeo, mat);
+  skirt.receiveShadow = false;
+  const group = new THREE.Group();
+  group.add(top, skirt);
+  return group;
 }
 
 export function buildFarTerrain(): { group: THREE.Group } {
@@ -1178,12 +1217,22 @@ export function buildFarTerrain(): { group: THREE.Group } {
   const E = 260; // how far the ring extends sideways
   const Z0 = -LZ / 2;
   const Z1 = LZ / 2;
+  // Seam apron: the domain terrain mesh samples bedAt at CELL CENTERS while a
+  // far patch at the exact edge samples the analytic bed — the half-cell offset
+  // used to open hairline cracks (white streaks) along every domain edge once
+  // the jagged peaks that hid them were removed. Each patch now extends ~2.5 m
+  // INTO the domain, sunk 0.8 m below the bed, so the domain surface always
+  // renders on top of a tucked-under apron — no crack can ever open.
+  const OV = 2.5;
+  const SINK = 0.8;
   // upstream continuation — rises into the headwall range that hugs the lake
-  group.add(farPatch(-260, 0, -E, E, 60, 100));
-  // downstream continuation toward the horizon
-  group.add(farPatch(LX, LX + 260, -E, E, 60, 100));
-  // side ranges
-  group.add(farPatch(0, LX, Z0 - E, Z0, 78, 64));
-  group.add(farPatch(0, LX, Z1, Z1 + E, 78, 64));
+  // (also covers both far corners)
+  group.add(farPatch(-260, OV, -E, E, 60, 100, SINK));
+  // downstream continuation toward the horizon (also covers both far corners)
+  group.add(farPatch(LX - OV, LX + 260, -E, E, 60, 100, SINK));
+  // side ranges — inset in x so they meet, never overlap, the upstream and
+  // downstream patches
+  group.add(farPatch(OV, LX - OV, Z0 - E, Z0 + OV, 76, 64, SINK));
+  group.add(farPatch(OV, LX - OV, Z1 - OV, Z1 + E, 76, 64, SINK));
   return { group };
 }
