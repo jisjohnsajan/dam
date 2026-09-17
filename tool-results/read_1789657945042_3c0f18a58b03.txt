@@ -1,0 +1,692 @@
+   536→      uDt: { value: 0 },
+   537→      uSrcRate: { value: 0 },
+   538→      uSrcBox: { value: new THREE.Vector4(SRC_X0 / LX, SRC_X1 / LX, (-GORGE_HALF_W + LZ / 2) / LZ, (GORGE_HALF_W + LZ / 2) / LZ) },
+   539→      uDriveOn: { value: 1 },
+   540→      uDriveEta: { value: fracToSimLevel(this.liveFrac) },
+   541→      uDriveRate: { value: 1.2 },
+   542→      uDomain: { value: new THREE.Vector2(LX, LZ) },
+   543→      uResMaxX: { value: DAM_X - 0.4 },
+   544→    }));
+   545→    this.velPass = new FullScreenQuad(mat(VEL_FRAG, {
+   546→      ...common,
+   547→      uEtaNew: { value: null },
+   548→      uDt: { value: 0 },
+   549→      uManning: { value: MANNING },
+   550→    }));
+   551→    this.foamPass = new FullScreenQuad(mat(FOAM_FRAG, {
+   552→      ...common,
+   553→      uFoam: { value: null },
+   554→      uDt: { value: 0 },
+   555→    }));
+   556→    this.sprayPass = new FullScreenQuad(mat(SPRAY_FRAG, {
+   557→      uSpray: { value: null },
+   558→      uState: { value: null },
+   559→      uBed: { value: this.texBed },
+   560→      uStruct: { value: this.texStruct },
+   561→      uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   562→      uDt: { value: 0 },
+   563→      uTime: { value: 0 },
+   564→      uSpawnSpeed: { value: 2.6 },
+   565→      uDomain: { value: new THREE.Vector2(LX, LZ) },
+   566→    }));
+   567→    this.copyPass = new FullScreenQuad(mat(COPY_FRAG, { uInit: { value: null } }));
+   568→    this.downPass = new FullScreenQuad(mat(DOWN_FRAG, { uState: { value: null } }));
+   569→    this.snapPass = new FullScreenQuad(mat(SNAP_FRAG, {
+   570→      uState: { value: null },
+   571→      uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   572→    }));
+   573→
+   574→    // count inflow strip cells (gorge inlet)
+   575→    let n = 0;
+   576→    for (let j = 0; j < NZ; j++) {
+   577→      const z = (j + 0.5) * DZ - LZ / 2;
+   578→      if (Math.abs(z) > GORGE_HALF_W) continue;
+   579→      for (let i = Math.ceil(SRC_X0 / DX); i < Math.floor(SRC_X1 / DX); i++)
+   580→        if (this.bedGrid[j * NX + i] < 14.5) n++;
+   581→    }
+   582→    this.stripCells = Math.max(n, 1);
+   583→  }
+   584→
+   585→  private renderTo(q: FullScreenQuad, target: THREE.WebGLRenderTarget | null): void {
+   586→    this.renderer.setRenderTarget(target);
+   587→    q.render(this.renderer);
+   588→    this.renderer.setRenderTarget(null);
+   589→  }
+   590→
+   591→  // =================================================================== water
+   592→  private buildWater(): void {
+   593→    const geo = new THREE.PlaneGeometry(LX, LZ, 320, 192);
+   594→    geo.rotateX(-Math.PI / 2);
+   595→    geo.translate(LX / 2, 0, 0);
+   596→    this.waterMat = new THREE.ShaderMaterial({
+   597→      vertexShader: WATER_VERT,
+   598→      fragmentShader: WATER_FRAG,
+   599→      transparent: true,
+   600→      side: THREE.DoubleSide,
+   601→      uniforms: {
+   602→        uState: { value: null },
+   603→        uBed: { value: this.texBed },
+   604→        uStruct: { value: this.texStruct },
+   605→        uFoam: { value: null },
+   606→        uArrTex: { value: this.texArr },
+   607→        uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   608→        uCell: { value: new THREE.Vector2(CELL[0], CELL[1]) },
+   609→        uDomain: { value: new THREE.Vector2(LX, LZ) },
+   610→        uDownGrid: { value: new THREE.Vector2(DOWN_W, DOWN_H) },
+   611→        uSunDir: { value: this.sunDir },
+   612→        uSunColor: { value: new THREE.Vector3(1.0, 0.92, 0.8) },
+   613→        uCamPos: { value: new THREE.Vector3() },
+   614→        uShowSpeed: { value: 0 },
+   615→        uLayerMode: { value: 0 },
+   616→        uTime: { value: 0 },
+   617→        uRain: { value: 0 },
+   618→        uFogColor: { value: new THREE.Color(0xc6d8ea) },
+   619→        uFogNear: { value: 470 },
+   620→        uFogFar: { value: 2300 },
+   621→      },
+   622→    });
+   623→    const mesh = new THREE.Mesh(geo, this.waterMat);
+   624→    mesh.renderOrder = 10;
+   625→    mesh.frustumCulled = false;
+   626→    this.scene.add(mesh);
+   627→
+   628→    // spray points
+   629→    const pg = new THREE.BufferGeometry();
+   630→    const pp = new Float32Array(SPRAY_N * SPRAY_N * 3);
+   631→    for (let j = 0; j < SPRAY_N; j++)
+   632→      for (let i = 0; i < SPRAY_N; i++) {
+   633→        const k = (j * SPRAY_N + i) * 3;
+   634→        pp[k] = (i + 0.5) / SPRAY_N;
+   635→        pp[k + 1] = (j + 0.5) / SPRAY_N;
+   636→        pp[k + 2] = 0;
+   637→      }
+   638→    pg.setAttribute('position', new THREE.BufferAttribute(pp, 3));
+   639→    this.sprayMat = new THREE.ShaderMaterial({
+   640→      vertexShader: SPRAY_POINTS_VERT,
+   641→      fragmentShader: SPRAY_POINTS_FRAG,
+   642→      transparent: true,
+   643→      depthWrite: false,
+   644→      uniforms: {
+   645→        uSpray: { value: null },
+   646→        uState: { value: null },
+   647→        uTexel: { value: new THREE.Vector2(TEXEL[0], TEXEL[1]) },
+   648→        uDomain: { value: new THREE.Vector2(LX, LZ) },
+   649→        uPixelRatio: { value: this.renderer.getPixelRatio() },
+   650→      },
+   651→    });
+   652→    const points = new THREE.Points(pg, this.sprayMat);
+   653→    points.renderOrder = 11;
+   654→    points.frustumCulled = false;
+   655→    this.scene.add(points);
+   656→  }
+   657→
+   658→  // ==================================================================== props
+   659→  private buildProps(): void {
+   660→    this.dam = buildDam();
+   661→    this.scene.add(this.dam.group);
+   662→    const h = buildHouses();
+   663→    this.houses = h.houses;
+   664→    this.scene.add(h.group);
+   665→    const t = buildTrees();
+   666→    this.trees = t.trees;
+   667→    this.scene.add(t.group);
+   668→    const b = buildBarrels();
+   669→    this.barrels = b.barrels;
+   670→    this.scene.add(b.group);
+   671→    const d = buildDebris();
+   672→    this.chunks = d.chunks;
+   673→    this.scene.add(d.group);
+   674→    const r = buildRoads();
+   675→    this.scene.add(r.group);
+   676→    const g = buildGaugeStations();
+   677→    this.scene.add(g.group);
+   678→    const m = buildInfraMarkers();
+   679→    this.infraPins = m.pins;
+   680→    this.scene.add(m.group);
+   681→    const signs = buildWarningSigns();
+   682→    this.scene.add(signs.group);
+   683→    const bo = buildBoulders();
+   684→    this.scene.add(bo.group);
+   685→    const dock = buildDockBoats();
+   686→    this.scene.add(dock.group);
+   687→    const tw = buildTown();
+   688→    this.scene.add(tw.group);
+   689→    this.powerhouse = buildPowerhouse();
+   690→    this.scene.add(this.powerhouse.group);
+   691→    for (const br of this.barrels) {
+   692→      this.floaters.push({ mesh: br.mesh, pos: br.pos, vel: br.vel, home: br.mesh.position.clone() });
+   693→    }
+   694→    for (const bt of dock.boats) {
+   695→      this.floaters.push({
+   696→        mesh: bt.mesh,
+   697→        pos: bt.mesh.position.clone(),
+   698→        vel: new THREE.Vector3(),
+   699→        home: bt.mesh.position.clone(),
+   700→      });
+   701→    }
+   702→  }
+   703→
+   704→  // ==================================================================== rain
+   705→  private buildRain(): void {
+   706→    const N = 1100;
+   707→    this.rainPos = new Float32Array(N * 6);
+   708→    const p = this.rainPos;
+   709→    for (let i = 0; i < N; i++) {
+   710→      const x = -30 + Math.random() * (LX + 110);
+   711→      const y = Math.random() * 82;
+   712→      const z = -LZ / 2 - 40 + Math.random() * (LZ + 80);
+   713→      p[i * 6] = x; p[i * 6 + 1] = y; p[i * 6 + 2] = z;
+   714→      p[i * 6 + 3] = x + 0.26; p[i * 6 + 4] = y + 1.5; p[i * 6 + 5] = z + 0.09;
+   715→    }
+   716→    const geo = new THREE.BufferGeometry();
+   717→    geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+   718→    const mat = new THREE.LineBasicMaterial({ color: 0xaaccee, transparent: true, opacity: 0, depthWrite: false });
+   719→    this.rainMesh = new THREE.LineSegments(geo, mat);
+   720→    this.rainMesh.visible = false;
+   721→    this.rainMesh.frustumCulled = false;
+   722→    this.rainMesh.renderOrder = 9;
+   723→    this.scene.add(this.rainMesh);
+   724→  }
+   725→
+   726→  // per-frame storm driver: rain streaks, darkened sky/fog, lightning flashes
+   727→  private updateWeather(dtReal: number): void {
+   728→    const target = this.rainInflow > 0 ? (this.rainHeavy ? 1 : 0.55) : 0;
+   729→    this.rainVis += (target - this.rainVis) * Math.min(1, dtReal * 1.4);
+   730→    const rv = this.rainVis;
+   731→
+   732→    if (this.rainMesh) {
+   733→      this.rainMesh.visible = rv > 0.02;
+   734→      if (rv > 0.02) {
+   735→        const p = this.rainPos;
+   736→        const n = p.length / 6;
+   737→        const fall = 46 * dtReal;
+   738→        const drift = 8 * dtReal;
+   739→        for (let i = 0; i < n; i++) {
+   740→          const k = i * 6;
+   741→          p[k] += drift; p[k + 1] -= fall; p[k + 2] += drift * 0.35;
+   742→          p[k + 3] = p[k] + 0.26; p[k + 4] = p[k + 1] + 1.5; p[k + 5] = p[k + 2] + 0.09;
+   743→          if (p[k + 1] < 2.5) {
+   744→            const x = -30 + Math.random() * (LX + 110);
+   745→            const y = 48 + Math.random() * 34;
+   746→            const z = -LZ / 2 - 40 + Math.random() * (LZ + 80);
+   747→            p[k] = x; p[k + 1] = y; p[k + 2] = z;
+   748→            p[k + 3] = x + 0.26; p[k + 4] = y + 1.5; p[k + 5] = z + 0.09;
+   749→          }
+   750→        }
+   751→        (this.rainMesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+   752→        (this.rainMesh.material as THREE.LineBasicMaterial).opacity = 0.38 * rv;
+   753→      }
+   754→    }
+   755→
+   756→    // occasional lightning during heavy rain
+   757→    this.flash *= Math.exp(-dtReal * 6.5);
+   758→    if (rv > 0.6) {
+   759→      this.boltTimer -= dtReal;
+   760→      if (this.boltTimer <= 0) {
+   761→        this.boltTimer = 5 + Math.random() * 10;
+   762→        this.flash = 0.7 + Math.random() * 0.5;
+   763→      }
+   764→    }
+   765→
+   766→    // dim / storm the atmosphere
+   767→    this.sunLight.intensity = 2.35 * (1 - 0.7 * rv) + this.flash * 5.5;
+   768→    this.sunLight.color.setHex(this.flash > 0.25 ? 0xdfe8ff : 0xffd9a8);
+   769→    this.hemiLight.intensity = 0.32 * (1 - 0.4 * rv) + this.flash * 1.2;
+   770→    this.scene.environmentIntensity = 0.22 * (1 - 0.5 * rv);
+   771→    const fog = this.scene.fog as THREE.Fog;
+   772→    fog.color.copy(this.fogDay).lerp(this.fogStorm, rv * 0.85);
+   773→    fog.near = 470 - 220 * rv;
+   774→    fog.far = 2300 - 1150 * rv;
+   775→    this.renderer.toneMappingExposure = 0.85 - 0.13 * rv + this.flash * 0.12;
+   776→    const su = this.skyU;
+   777→    if (su) {
+   778→      su.turbidity.value = 4.6 + 5.4 * rv;
+   779→      su.rayleigh.value = Math.max(2.2 - 1.6 * rv, 0.3);
+   780→      su.mieCoefficient.value = 0.006 + 0.02 * rv;
+   781→    }
+   782→
+   783→    // water shader: choppier ripples + storm fog match
+   784→    const wu = this.waterMat.uniforms;
+   785→    wu.uRain.value = rv;
+   786→    (wu.uFogColor.value as THREE.Color).copy(fog.color);
+   787→    wu.uFogNear.value = fog.near;
+   788→    wu.uFogFar.value = fog.far;
+   789→  }
+   790→
+   791→  // ================================================================ sim stepping
+   792→  private swapState(): void {
+   793→    const t = this.curState;
+   794→    this.curState = this.nextState;
+   795→    this.nextState = t;
+   796→  }
+   797→
+   798→  private simSubstep(dt: number): void {
+   799→    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+   800→    eu.uState.value = this.curState.texture;
+   801→    eu.uDt.value = dt;
+   802→    eu.uG.value = this.gravity;
+   803→    eu.uSrcRate.value = this.srcRate;
+   804→    this.renderTo(this.etaPass, this.rtEta);
+   805→
+   806→    const vu = (this.velPass.material as THREE.ShaderMaterial).uniforms;
+   807→    vu.uState.value = this.curState.texture;
+   808→    vu.uEtaNew.value = this.rtEta.texture;
+   809→    vu.uDt.value = dt;
+   810→    vu.uG.value = this.gravity;
+   811→    this.renderTo(this.velPass, this.nextState);
+   812→    this.swapState();
+   813→
+   814→    if (this.foamOn) {
+   815→      const fu = (this.foamPass.material as THREE.ShaderMaterial).uniforms;
+   816→      fu.uState.value = this.curState.texture;
+   817→      fu.uFoam.value = this.curFoam.texture;
+   818→      fu.uDt.value = dt;
+   819→      fu.uG.value = this.gravity;
+   820→      this.renderTo(this.foamPass, this.nextFoam);
+   821→      const t = this.curFoam;
+   822→      this.curFoam = this.nextFoam;
+   823→      this.nextFoam = t;
+   824→    }
+   825→
+   826→    if (this.sprayOn) {
+   827→      const su = (this.sprayPass.material as THREE.ShaderMaterial).uniforms;
+   828→      su.uSpray.value = this.curSpray.texture;
+   829→      su.uState.value = this.curState.texture;
+   830→      su.uDt.value = dt;
+   831→      su.uTime.value = this.simTime;
+   832→      this.renderTo(this.sprayPass, this.nextSpray);
+   833→      const t = this.curSpray;
+   834→      this.curSpray = this.nextSpray;
+   835→      this.nextSpray = t;
+   836→    }
+   837→  }
+   838→
+   839→  private resetSim(): void {
+   840→    const cu = (this.copyPass.material as THREE.ShaderMaterial).uniforms;
+   841→    cu.uInit.value = this.texInit;
+   842→    this.renderTo(this.copyPass, this.rtStateA);
+   843→    this.renderTo(this.copyPass, this.rtStateB);
+   844→    this.renderTo(this.copyPass, this.rtEta);
+   845→    cu.uInit.value = this.texBlack;
+   846→    this.renderTo(this.copyPass, this.rtFoamA);
+   847→    this.renderTo(this.copyPass, this.rtFoamB);
+   848→    cu.uInit.value = this.texSprayInit;
+   849→    this.renderTo(this.copyPass, this.rtSprayA);
+   850→    this.renderTo(this.copyPass, this.rtSprayB);
+   851→    this.curState = this.rtStateA;
+   852→    this.nextState = this.rtStateB;
+   853→    this.curFoam = this.rtFoamA;
+   854→    this.nextFoam = this.rtFoamB;
+   855→    this.curSpray = this.rtSprayA;
+   856→    this.nextSpray = this.rtSprayB;
+   857→    this.simTime = 0;
+   858→    this.qPeak = 0;
+   859→    this.snaps = [];
+   860→    this.arr.fill(0);
+   861→    this.arrDirty = true;
+   862→    this.gaugePeaks = [0, 0, 0, 0];
+   863→    this.gaugeArr = [null, null, null, null];
+   864→    this.applyStruct(null, null);
+   865→  }
+   866→
+   867→  // ================================================================ scenarios
+   868→  private applyStruct(breach: BreachSpan | null, gate: number | null): void {
+   869→    applyStructState(this.structArr, this.structBase, breach, gate);
+   870→    this.texStruct.needsUpdate = true;
+   871→  }
+   872→
+   873→  private breachSpanFor(widthM: number, loc: BreachLocation): BreachSpan {
+   874→    const count = clamp(Math.round(widthM / 32), 1, BLOCK_N);
+   875→    const start = loc === 'left' ? 0 : loc === 'right' ? BLOCK_N - count : Math.floor((BLOCK_N - count) / 2);
+   876→    return { start, count, depth01: 0 };
+   877→  }
+   878→
+   879→  private blockInvert(zMid: number): number {
+   880→    const b = bedAt(DAM_X + 1.5, zMid);
+   881→    return clamp(b + 0.4, BREACH_BOTTOM - 1.2, BREACH_BOTTOM + 1.4);
+   882→  }
+   883→
+   884→  // wire up a failing block span: invert elevations + staggered failure delays
+   885→  private initBreach(span: BreachSpan): void {
+   886→    this.breachSpan = span;
+   887→    this.breachInverts = [];
+   888→    for (let b = span.start; b < span.start + span.count; b++) {
+   889→      const z0 = BLOCK_Z0 + b * BLOCK_W;
+   890→      this.breachInverts.push(this.blockInvert(z0 + BLOCK_W / 2));
+   891→    }
+   892→    this.breachDelays = [];
+   893→    for (let k = 0; k < span.count; k++) {
+   894→      this.breachDelays.push(Math.random() * this.breachTau * 0.3);
+   895→    }
+   896→  }
+   897→
+   898→  runScenario(p: ScenarioParams): void {
+   899→    if (this.scenario) return;
+   900→    this.scenario = p;
+   901→    this.phase = 'scenario';
+   902→    this.scenT = 0;
+   903→    this.snapClock = 0;
+   904→    this.overtopT = 0;
+   905→    this.rainInflow = p.rain === 'none' ? 0 : p.rain === 'moderate' ? 26 : 64;
+   906→    this.rainHeavy = p.rain === 'heavy';
+   907→    this.breachSpan = null;
+   908→    this.breachT = null;
+   909→    this.breachDepth01 = 0;
+   910→    this.breachFx = false;
+   911→    this.structDirty = true;
+   912→
+   913→    // reservoir set to the scenario level (drive takes it there quickly)
+   914→    const target = clamp(fracToSimLevel(p.levelFrac), 0, 24.4);
+   915→    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+   916→    eu.uDriveEta.value = target;
+   917→    eu.uDriveOn.value = 1;
+   918→
+   919→    if (p.mechanism === 'overtopping') {
+   920→      // surge inflow pushes the lake above the crest; erosion follows
+   921→      eu.uDriveEta.value = Math.max(target, CREST + 1.0);
+   922→    } else {
+   923→      // schedule breach after the reservoir reaches level (~2-6 demo s)
+   924→      this.breachT = -clamp((target - this.lastLevel) / 1.4, 1.5, 5);
+   925→      this.breachTau = Math.max(p.formationMin / this.damProfile.timeMinPerSec, 4) / (p.mechanism === 'piping' ? 0.65 : 1) / this.breachRate;
+   926→      this.breachPre = p.mechanism === 'piping' ? 0.22 : 0;
+   927→      this.initBreach(this.breachSpanFor(p.breachWidthM, p.location));
+   928→    }
+   929→    this.audio.burst(0.2);
+   930→  }
+   931→
+   932→  // Starts the breach erosion clock and fires the failure effects (camera
+   933→  // shake, audio burst, concrete debris). Runs when the scenario decides the
+   934→  // dam begins to fail: overtopping reaches it after the 7 s surcharge, and
+   935→  // structural / piping reach it through the armed negative breachT crossing
+   936→  // zero in stepScenario.
+   937→  private triggerBreachErosion(): void {
+   938→    if (this.breachT !== null && this.breachT >= 0) return; // already eroding
+   939→    this.breachT = 0;
+   940→    this.fireBreachFx();
+   941→  }
+   942→
+   943→  private fireBreachFx(): void {
+   944→    if (this.breachFx) return;
+   945→    this.breachFx = true;
+   946→    this.shake = 1;
+   947→    this.audio.burst(1);
+   948→    this.spawnDebris();
+   949→  }
+   950→
+   951→  openGates(): void {
+   952→    if (this.gateT !== null) return;
+   953→    this.gateT = 0;
+   954→    this.audio.burst(0.35);
+   955→  }
+   956→
+   957→  reset(): void {
+   958→    this.phase = 'live';
+   959→    this.scenario = null;
+   960→    this.scenT = 0;
+   961→    this.breachT = null;
+   962→    this.breachTau = 15;
+   963→    this.breachPre = 0;
+   964→    this.breachSpan = null;
+   965→    this.breachDepth01 = 0;
+   966→    this.breachInverts = [];
+   967→    this.breachDelays = [];
+   968→    this.breachFx = false;
+   969→    this.gateT = null;
+   970→    this.gateElev = null;
+   971→    this.overtopT = 0;
+   972→    this.shake = 0;
+   973→    this.scrubbing = false;
+   974→    this.paused = false;
+   975→    this.rainInflow = 0;
+   976→    this.breachRate = 1;
+   977→    for (const blk of this.dam.breachBlocks) {
+   978→      blk.group.position.y = 0;
+   979→      blk.group.rotation.set(0, 0, 0);
+   980→      blk.group.visible = true;
+   981→    }
+   982→    for (const g of this.dam.gates) g.position.y = 19.05;
+   983→    for (const c of this.chunks) {
+   984→      c.active = false;
+   985→      c.mesh.visible = false;
+   986→    }
+   987→    for (const h of this.houses) {
+   988→      h.prog = 0;
+   989→      h.group.rotation.x = 0;
+   990→      h.group.rotation.z = 0;
+   991→      h.group.position.y = h.ground;
+   992→    }
+   993→    for (const t of this.trees) {
+   994→      t.prog = 0;
+   995→      t.group.rotation.x = 0;
+   996→      t.group.rotation.z = 0;
+   997→    }
+   998→    for (const f of this.floaters) {
+   999→      f.pos.copy(f.home);
+  1000→      f.vel.set(0, 0, 0);
+  1001→      f.mesh.position.copy(f.home);
+  1002→    }
+  1003→    if (this.evacLine) {
+  1004→      this.scene.remove(this.evacLine);
+  1005→      this.evacLine.geometry.dispose();
+  1006→      this.evacLine = null;
+  1007→    }
+  1008→    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+  1009→    eu.uDriveEta.value = fracToSimLevel(this.liveFrac);
+  1010→    eu.uDriveOn.value = 1;
+  1011→    this.resetSim();
+  1012→  }
+  1013→
+  1014→  private spawnDebris(): void {
+  1015→    for (const c of this.chunks) {
+  1016→      const r = Math.random();
+  1017→      c.mesh.visible = true;
+  1018→      c.active = true;
+  1019→      c.mesh.position.set(DAM_X + 1 + Math.random() * 2.5, CREST + 0.5 + Math.random(), -13 + r * 22);
+  1020→      c.vel.set(4 + Math.random() * 7, 3 + Math.random() * 5, (Math.random() - 0.5) * 9);
+  1021→      c.mesh.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+  1022→    }
+  1023→  }
+  1024→
+  1025→  // ================================================================ main loop
+  1026→  private tick = (): void => {
+  1027→    this.rafId = requestAnimationFrame(this.tick);
+  1028→    const now = performance.now();
+  1029→    const dtReal = Math.min((now - this.lastFrameTime) / 1000, 0.05);
+  1030→    this.lastFrameTime = now;
+  1031→    this.fpsEma = this.fpsEma * 0.95 + (1 / Math.max(dtReal, 1e-4)) * 0.05;
+  1032→    const dtSim = this.paused ? 0 : dtReal * this.timeScale;
+  1033→
+  1034→    if (dtSim > 0 && !this.scrubbing) {
+  1035→      this.stepScenario(dtSim);
+  1036→
+  1037→      const curInflow = this.baseInflow + this.rainInflow;
+  1038→      this.srcRate = curInflow / (this.stripCells * DX * DZ);
+  1039→
+  1040→      if (this.structDirty) {
+  1041→        this.applyStruct(this.breachSpan, this.gateElev);
+  1042→        this.structDirty = false;
+  1043→      }
+  1044→
+  1045→      const sub = clamp(Math.ceil(dtSim / DT_MAX), 1, 28);
+  1046→      const h = dtSim / sub;
+  1047→      for (let i = 0; i < sub; i++) this.simSubstep(h);
+  1048→      this.simTime += dtSim;
+  1049→      this.updateProps(dtSim);
+  1050→
+  1051→      // snapshots during a scenario for the time machine
+  1052→      if (this.scenario) {
+  1053→        this.snapClock += dtSim;
+  1054→        if (this.snapClock >= SNAP_EVERY) {
+  1055→          this.snapClock = 0;
+  1056→          this.recordSnapshot();
+  1057→        }
+  1058→      }
+  1059→    }
+  1060→
+  1061→    // readback for CPU physics + stats
+  1062→    if (this.frame % 2 === 0) {
+  1063→      (this.downPass.material as THREE.ShaderMaterial).uniforms.uState.value = this.curState.texture;
+  1064→      this.renderTo(this.downPass, this.rtDown);
+  1065→      this.renderer.readRenderTargetPixels(this.rtDown, 0, 0, DOWN_W, DOWN_H, this.field.data);
+  1066→      this.updateArrival();
+  1067→    }
+  1068→
+  1069→    this.updateCamera(dtReal);
+  1070→    this.updateWeather(dtReal);
+  1071→    this.updateSensors(dtReal);
+  1072→    this.waterMat.uniforms.uState.value = this.curState.texture;
+  1073→    this.waterMat.uniforms.uFoam.value = this.curFoam.texture;
+  1074→    this.waterMat.uniforms.uTime.value = this.simTime;
+  1075→    this.waterMat.uniforms.uCamPos.value.copy(this.camera.position);
+  1076→    this.sprayMat.uniforms.uSpray.value = this.curSpray.texture;
+  1077→    this.sprayMat.uniforms.uState.value = this.curState.texture;
+  1078→    (this.sprayPass.material as THREE.ShaderMaterial).uniforms.uState.value = this.curState.texture;
+  1079→
+  1080→    // render with camera shake
+  1081→    let shook: THREE.Vector3 | null = null;
+  1082→    if (this.shake > 0.002) {
+  1083→      shook = new THREE.Vector3(
+  1084→        (Math.random() - 0.5) * this.shake * 0.9,
+  1085→        (Math.random() - 0.5) * this.shake * 0.9,
+  1086→        (Math.random() - 0.5) * this.shake * 0.9,
+  1087→      );
+  1088→      this.camera.position.add(shook);
+  1089→    }
+  1090→    this.composer.render();
+  1091→    if (shook) {
+  1092→      this.camera.position.sub(shook);
+  1093→      this.shake *= Math.exp(-dtReal * 1.15);
+  1094→    }
+  1095→
+  1096→    // stats ~10 Hz
+  1097→    if (this.frame % 6 === 0 && this.onStats) {
+  1098→      const s = this.computeStats();
+  1099→      this.onStats(s);
+  1100→      const v01 = clamp(s.vmax / 10, 0, 1);
+  1101→      this.audio.setIntensity(v01);
+  1102→    }
+  1103→
+  1104→    if (this.frame === 3) {
+  1105→      (window as unknown as Record<string, unknown>).__damReady = true;
+  1106→    }
+  1107→    this.frame++;
+  1108→  };
+  1109→
+  1110→  // ------------------------------------------------ scenario + gate animation
+  1111→  private stepScenario(dt: number): void {
+  1112→    const eu = (this.etaPass.material as THREE.ShaderMaterial).uniforms;
+  1113→    const sc = this.scenario;
+  1114→
+  1115→    if (this.gateT !== null && this.gateT < 1) {
+  1116→      this.gateT = Math.min(1, this.gateT + dt / 2.5);
+  1117→      const e = easeInOut(this.gateT);
+  1118→      this.gateElev = SPILL_CREST_CLOSED + (GATE_OPEN_ELEV - SPILL_CREST_CLOSED) * e;
+  1119→      for (const g of this.dam.gates) g.position.y = 19.05 + 6.9 * e;
+  1120→      this.structDirty = true;
+  1121→    }
+  1122→
+  1123→    if (!sc) {
+  1124→      // live monitoring: drive toward the user level target
+  1125→      eu.uDriveOn.value = 1;
+  1126→      return;
+  1127→    }
+  1128→
+  1129→    this.scenT += dt;
+  1130→
+  1131→    if (sc.mechanism === 'overtopping') {
+  1132→      this.overtopT += dt;
+  1133→      // surcharge loading: the crest carries live water — a faint structural
+  1134→      // tremor builds until the erosion clock triggers
+  1135→      if (this.breachT === null) {
+  1136→        this.shake = Math.max(this.shake, 0.035 + 0.03 * clamp(this.overtopT / 7, 0, 1));
+  1137→      }
+  1138→      // once overtopped for long enough, crest erosion begins
+  1139→      if (this.overtopT > 7 && (this.breachT === null || this.breachT < 0)) {
+  1140→        if (this.breachSpan === null) {
+  1141→          this.breachTau = Math.max(sc.formationMin / this.damProfile.timeMinPerSec, 4) / this.breachRate;
+  1142→          this.breachPre = 0;
+  1143→          this.initBreach(this.breachSpanFor(sc.breachWidthM, sc.location));
+  1144→        }
+  1145→        this.triggerBreachErosion();
+  1146→      }
+  1147→    }
+  1148→
+  1149→    // breach formation — each monolith block fails on a staggered delay, and the
+  1150→    // simulated structure field descends per block with the SAME curve as the
+  1151→    // visuals, so water always pours exactly through the visibly-open gap.
+  1152→    if (this.breachT !== null && this.breachSpan) {
+  1153→      this.breachT += dt;
+  1154→      // STAGE 1 — hydraulic stress: while the breach clock is armed but not
+  1155→      // yet eroding, the structure hums under surcharge load (subtle vibration,
+  1156→      // growing as failure approaches — engineering tension, not an explosion)
+  1157→      if (this.breachT <= 0) {
+  1158→        const armSpan = Math.max(-this.breachT, 0.5);
+  1159→        const ramp = clamp(1 + this.breachT / armSpan, 0, 1);
+  1160→        this.shake = Math.max(this.shake, 0.045 + 0.11 * ramp * ramp);
+  1161→      }
+  1162→      if (this.breachT > 0) {
+  1163→        // just crossed the arming delay — fire the failure effects exactly once
+  1164→        if (this.breachT <= dt) this.fireBreachFx();
+  1165→        const tau = this.breachTau;
+  1166→        const depths: number[] = [];
+  1167→        let minP = 1;
+  1168→        let maxD = 0;
+  1169→        for (let k = 0; k < this.breachSpan.count; k++) {
+  1170→          const tt = Math.max(this.breachT - (this.breachDelays[k] ?? 0), 0);
+  1171→          const pk = 1 - Math.exp(-Math.pow(tt / tau, 1.7));
+  1172→          const d = clamp(this.breachPre + (1 - this.breachPre) * pk, 0, 1);
+  1173→          depths.push(d);
+  1174→          if (d < minP) minP = d;
+  1175→          if (d > maxD) maxD = d;
+  1176→        }
+  1177→        this.breachDepth01 = maxD;
+  1178→        this.breachSpan.depth01 = maxD;
+  1179→        this.breachSpan.depths = depths;
+  1180→        this.structDirty = true;
+  1181→        // sink the failing blocks with the SAME per-block curve as the struct field
+  1182→        const bi = this.breachInverts;
+  1183→        for (let k = 0; k < this.breachSpan.count; k++) {
+  1184→          const blockIdx = this.breachSpan.start + k;
+  1185→          const blk = this.dam.breachBlocks[blockIdx];
+  1186→          if (!blk) continue;
+  1187→          const d = depths[k];
+  1188→          const drop = (CREST - bi[k]) * d;
+  1189→          blk.group.position.y = -drop;
+  1190→          blk.group.rotation.z = -0.06 * d;
+  1191→          blk.group.rotation.x = (blockIdx % 2 === 0 ? 1 : -1) * 0.016 * d;
+  1192→          blk.group.rotation.y = (blockIdx % 2 === 0 ? -1 : 1) * 0.012 * d;
+  1193→        }
+  1194→        if (minP > 0.995 && this.breachT > tau) {
+  1195→          this.breachT = null; // formation complete; struct stays at full depth
+  1196→        }
+  1197→      }
+  1198→      // stop the level drive once the breach starts draining the lake
+  1199→      if (this.breachDepth01 > 0.02 && sc.mechanism !== 'overtopping') {
+  1200→        eu.uDriveOn.value = 0;
+  1201→      }
+  1202→    }
+  1203→  }
+  1204→
+  1205→  // -------------------------------------------------------------- arrival map
+  1206→  private updateArrival(): void {
+  1207→    const d = this.field.data;
+  1208→    let changed = false;
+  1209→    // track only downstream of the dam (the reservoir is not "flood")
+  1210→    const firstCol = Math.ceil((DAM_X + 2) / (LX / DOWN_W));
+  1211→    for (let j = 0; j < DOWN_H; j++) {
+  1212→      for (let i = firstCol; i < DOWN_W; i++) {
+  1213→        const idx = j * DOWN_W + i;
+  1214→        if (this.arr[idx] === 0 && d[idx * 4 + 3] > 0.2) {
+  1215→          this.arr[idx] = this.simTime;
+  1216→          changed = true;
+  1217→        }
+  1218→      }
+  1219→    }
+  1220→    if (changed) {
+  1221→      this.arrDirty = true;
+  1222→      // upload scaled to real seconds (arrivalRamp normalizes over 240 min)
+  1223→      const scale = this.damProfile.timeMinPerSec * 60;
+  1224→      const up = new Float32Array(DOWN_W * DOWN_H);
+  1225→      for (let i = 0; i < up.length; i++) up[i] = this.arr[i] * scale;
+
+[showing lines 536-1225 of 1922; use offset=1226 with limit to continue reading]

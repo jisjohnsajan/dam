@@ -1,7 +1,7 @@
 // GLSL shaders for the GPU shallow-water solver, water surface, foam and spray.
 // All passes render fullscreen quads; state texture layout = (eta, u, v, h).
 
-import { LX, LZ, NX, NZ } from './terrain';
+import { LX, LZ, NX, NZ, DAM_X } from './terrain';
 
 export const TEXEL: [number, number] = [1 / NX, 1 / NZ];
 export const CELL: [number, number] = [LX / NX, LZ / NZ];
@@ -517,7 +517,7 @@ void main() {
 
   // ---- analysis layers (downstream of the dam only — the reservoir is storage)
   float wx = vUvw.x * uDomain.x;
-  if (uLayerMode > 0.5 && wx > 114.0) {
+  if (uLayerMode > 0.5 && wx > ${DAM_X + 2}.0) {
     if (uLayerMode < 1.5) {
       col = depthRamp(depth / 8.0);
     } else if (uLayerMode < 2.5) {
