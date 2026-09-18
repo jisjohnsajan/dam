@@ -1,17 +1,19 @@
-// DAMSAFE 3D — world dressing for the SQUARE CANVAS map: hydroelectric
-// powerhouse (intake tower, penstocks, turbine hall, tailrace, transformers,
-// transmission line), the downstream city districts, villages, farmland and
-// the far terrain ring that closes the horizon beyond the solver domain.
+// DAMSAFE 3D — world dressing for the DIAGONAL CORNER map (reference layout):
+// powerhouse at the dam toe, the downstream town on the left bank of the
+// diagonal river, village upstream, agricultural bench, industrial estate,
+// highway with the river bridge, power substation, farmland and the far
+// terrain ring that closes the horizon beyond the solver domain.
 //
-// Layout: dam + reservoir in the TOP-LEFT corner, river running east along the
-// upper canvas, city plain fanning across the centre/south-east, farmland on
-// the southern belt + south-west lakeside quadrant.
+// Layout (rotated frame s = downstream / t = cross-valley, see terrain.ts):
+// dam + reservoir in the TOP-LEFT corner facing diagonally down-right, the
+// river meanders to the BOTTOM-RIGHT exit through a broad floodplain, town on
+// the south-west bank, village + industry + farms on the north-east bench.
 //
 // Everything here is VISUAL dressing: the GPU shallow-water solver keeps
 // running on its own domain, so the powerhouse/town sit on bedAt() ground and
 // the flood wave genuinely reaches them during scenarios.
 import * as THREE from 'three';
-import { LX, LZ, bedAt, terrainColor, fbm, AXIS_Z, DAM_X, axisAt } from './terrain';
+import { LX, LZ, bedAt, terrainColor, fbm, st2xz, xz2st, axisT, DAM_S, DAM_TOE_S, SC, CREST, RES_LEVEL } from './terrain';
 
 const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
 
@@ -19,6 +21,14 @@ function hashRnd(i: number): number {
   const h = Math.sin(i * 127.1 + 311.7) * 43758.5453;
   return h - Math.floor(h);
 }
+
+// rotated-frame shortcut + range helper
+const STP = (s: number, t: number): [number, number] => st2xz(s, t);
+const range = (a: number, b: number, step: number): number[] => {
+  const r: number[] = [];
+  for (let v = a; v <= b + 1e-6; v += step) r.push(v);
+  return r;
+};
 
 function canvasTex(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): THREE.Texture {
   const cv = document.createElement('canvas');
@@ -48,9 +58,21 @@ const matDark = (): THREE.MeshStandardMaterial =>
   new THREE.MeshStandardMaterial({ color: 0x2c3438, roughness: 0.6, metalness: 0.3 });
 
 // ============================================================ POWERHOUSE
+// Authored in the rotated LOCAL dam frame (u downstream, w along-crest,
+// w = -t) and mounted with rotation.y = -45° at the corner — the whole
+// complex faces diagonally down the valley like the dam itself.
 export interface PowerhouseProps {
   group: THREE.Group;
   rotors: THREE.Group[]; // spinning generator flywheels
+}
+
+// local (u,w) → world, plus the ground elevation there
+function damXZ(u: number, w: number): [number, number] {
+  return [DAM_S * SC + (u - w) * SC, DAM_S * SC - LZ / 2 + (u + w) * SC];
+}
+function damBed(u: number, w: number): number {
+  const [x, z] = damXZ(u, w);
+  return bedAt(x, z);
 }
 
 function makePylon(h: number): THREE.Group {
@@ -109,73 +131,74 @@ export function buildPowerhouse(): PowerhouseProps {
   const concDark = matConcreteDark();
   const steel = matSteel();
 
-  // ---- intake tower in the reservoir (upstream face of the dam)
+  // ---- intake tower in the reservoir (just upstream of the dam face)
   const intake = new THREE.Group();
-  const iBed = bedAt(34.8, -69);
+  const iU = -5.2, iW = 24; // local dam frame (upstream of the face)
+  const iBed = damBed(iU, iW);
   const tower = new THREE.Mesh(new THREE.BoxGeometry(3.6, 15, 4.6), conc);
-  tower.position.set(34.8, iBed + 6.6, -69); // top ≈ 25.1 (2 m above crest)
+  tower.position.set(iU, iBed + 6.6, iW); // top ≈ 25.1 (2 m above crest)
   tower.castShadow = tower.receiveShadow = true;
   const deck = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.32, 5.5), concDark);
-  deck.position.set(34.8, iBed + 14.0, -69);
+  deck.position.set(iU, iBed + 14.0, iW);
   deck.castShadow = true;
   intake.add(tower, deck);
   // gantry hoist on the deck
-  for (const dz of [-1.7, 1.7]) {
+  for (const dw of [-1.7, 1.7]) {
     const col = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.3, 0.16), steel);
-    col.position.set(33.6, iBed + 15.3, -69 + dz);
+    col.position.set(iU - 1.2, iBed + 15.3, iW + dw);
     intake.add(col, col.clone().translateX(2.4));
   }
   const beam = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.16, 0.2), steel);
-  beam.position.set(34.8, iBed + 16.5, -69);
+  beam.position.set(iU, iBed + 16.5, iW);
   const hoist = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.45, 0.55), matDark());
-  hoist.position.set(34.8, iBed + 16.0, -69);
+  hoist.position.set(iU, iBed + 16.0, iW);
   intake.add(beam, hoist);
   // trash racks on the upstream face
   const rackFrame = new THREE.Mesh(new THREE.BoxGeometry(0.12, 6.4, 4.0), matDark());
-  rackFrame.position.set(32.95, iBed + 6.4, -69);
+  rackFrame.position.set(iU - 1.85, iBed + 6.4, iW);
   intake.add(rackFrame);
   for (let k = 0; k < 10; k++) {
     const bar = new THREE.Mesh(new THREE.BoxGeometry(0.07, 6.2, 0.09), steel);
-    bar.position.set(32.88, iBed + 6.4, -70.8 + k * 0.4);
+    bar.position.set(iU - 1.92, iBed + 6.4, iW - 1.8 + k * 0.4);
     intake.add(bar);
   }
   // dark intake openings facing the dam + wet well rim
   for (const oy of [2.0, 4.6]) {
     const open = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.3, 1.5), matDark());
-    open.position.set(36.65, iBed + oy, -69);
+    open.position.set(iU + 1.85, iBed + oy, iW);
     intake.add(open);
   }
   group.add(intake);
 
   // service bridge intake → crest
   const bridge = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.24, 2.1), concDark);
-  bridge.position.set(38.2, iBed + 14.0, -69);
+  bridge.position.set(iU + 3.4, iBed + 14.0, iW);
   bridge.castShadow = true;
   group.add(bridge);
   for (const s of [-1, 1]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.05, 0.05), steel);
-    rail.position.set(38.2, iBed + 14.42, -69 + s * 0.95);
+    rail.position.set(iU + 3.4, iBed + 14.42, iW + s * 0.95);
     group.add(rail);
   }
 
   // exposed conduit across the upstream face (tower → dam body, submerged)
   const feedCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(36.4, iBed + 7.1, -69),
-    new THREE.Vector3(38.2, iBed + 7.1, -69),
-    new THREE.Vector3(40.1, iBed + 7.1, -69),
+    new THREE.Vector3(iU + 1.6, iBed + 7.1, iW),
+    new THREE.Vector3(iU + 3.4, iBed + 7.1, iW),
+    new THREE.Vector3(iU + 5.3, iBed + 7.1, iW),
   ]);
   const feed = new THREE.Mesh(new THREE.TubeGeometry(feedCurve, 8, 0.52, 10, false), steel);
   group.add(feed);
 
   // ---- penstocks down the downstream face → powerhouse
   const penMat = matSteel();
-  const penZ = [-70.6, -67.4];
-  for (const z of penZ) {
+  const penW = [25.6, 22.4];
+  for (const w of penW) {
     const curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(44.9, 19.4, z),
-      new THREE.Vector3(46.4, 15.8, z),
-      new THREE.Vector3(48.1, 12.9, z),
-      new THREE.Vector3(50.9, 12.4, z),
+      new THREE.Vector3(4.9, 19.4, w),
+      new THREE.Vector3(6.4, 15.8, w),
+      new THREE.Vector3(8.1, 12.9, w),
+      new THREE.Vector3(10.9, 12.4, w),
     ]);
     const pipe = new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.52, 12, false), penMat);
     pipe.castShadow = true;
@@ -185,49 +208,49 @@ export function buildPowerhouse(): PowerhouseProps {
       const p = curve.getPoint(t);
       const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.18, 12), penMat);
       collar.position.copy(p);
-      collar.rotation.z = Math.PI / 2 - 0.35;
+      collar.rotation.x = Math.PI / 2 - 0.35;
       group.add(collar);
     }
   }
 
   // ---- powerhouse hall at the toe (open downstream bay showing the units)
   const ph = new THREE.Group();
-  const phBed = bedAt(54.3, -69);
+  const phBed = damBed(14.3, 24);
   const floor = new THREE.Mesh(new THREE.BoxGeometry(7.8, 0.5, 10.2), concDark);
-  floor.position.set(54.3, phBed + 0.25, -69);
+  floor.position.set(14.3, phBed + 0.25, 24);
   floor.receiveShadow = true;
   ph.add(floor);
   const wallH = 5.4;
   const backW = new THREE.Mesh(new THREE.BoxGeometry(0.35, wallH, 10.2), conc);
-  backW.position.set(50.65, phBed + wallH / 2, -69);
+  backW.position.set(10.65, phBed + wallH / 2, 24);
   backW.castShadow = backW.receiveShadow = true;
   const sideA = new THREE.Mesh(new THREE.BoxGeometry(7.8, wallH, 0.35), conc);
-  sideA.position.set(54.3, phBed + wallH / 2, -74.0);
+  sideA.position.set(14.3, phBed + wallH / 2, 19.0);
   const sideB = sideA.clone();
-  sideB.position.z = -64.0;
+  sideB.position.z = 29.0;
   ph.add(backW, sideA, sideB);
   // open front: columns + lintel
-  for (const dz of [-73.6, -64.4]) {
+  for (const dw of [19.4, 28.6]) {
     const col = new THREE.Mesh(new THREE.BoxGeometry(0.5, wallH, 0.5), conc);
-    col.position.set(58.0, phBed + wallH / 2, dz);
+    col.position.set(18.0, phBed + wallH / 2, dw);
     col.castShadow = true;
     ph.add(col);
   }
   const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.1, 10.2), conc);
-  lintel.position.set(58.0, phBed + wallH - 0.55, -69);
+  lintel.position.set(18.0, phBed + wallH - 0.55, 24);
   lintel.castShadow = true;
   ph.add(lintel);
   // roof + monitor
   const roof = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.32, 10.9), matWhite());
-  roof.position.set(54.3, phBed + wallH + 0.35, -69);
+  roof.position.set(14.3, phBed + wallH + 0.35, 24);
   roof.castShadow = true;
   const monitor = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.7, 7.0), matSteel());
-  monitor.position.set(54.3, phBed + wallH + 0.85, -69);
+  monitor.position.set(14.3, phBed + wallH + 0.85, 24);
   ph.add(roof, monitor);
   // crane rail inside
-  for (const dz of [-73.3, -64.7]) {
+  for (const dw of [19.7, 28.3]) {
     const railB = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.14, 0.14), steel);
-    railB.position.set(54.3, phBed + wallH - 0.25, dz);
+    railB.position.set(14.3, phBed + wallH - 0.25, dw);
     ph.add(railB);
   }
   // sign
@@ -244,13 +267,13 @@ export function buildPowerhouse(): PowerhouseProps {
     new THREE.PlaneGeometry(3.4, 0.85),
     new THREE.MeshStandardMaterial({ map: signTex, roughness: 0.7 }),
   );
-  sign.position.set(58.36, phBed + wallH - 0.55, -69);
+  sign.position.set(18.36, phBed + wallH - 0.55, 24);
   sign.rotation.y = Math.PI / 2;
   ph.add(sign);
   group.add(ph);
 
   // ---- 2 turbine-generator units (visible through the open bay)
-  for (const uz of [-71.4, -66.6]) {
+  for (const uw of [26.4, 21.6]) {
     const unit = new THREE.Group();
     // spiral casing
     const casing = new THREE.Mesh(new THREE.TorusGeometry(1.05, 0.36, 10, 22), steel);
@@ -278,21 +301,21 @@ export function buildPowerhouse(): PowerhouseProps {
     rotor.position.set(0, phBed + 4.05, 0);
     rotors.push(rotor);
     unit.add(casing, gen, rotor);
-    unit.position.set(53.6, 0, uz);
+    unit.position.set(13.6, 0, uw);
     group.add(unit);
     // draft tube exit through the back wall
     const draft = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.2, 1.6), concDark);
-    draft.position.set(50.2, phBed + 0.75, uz);
+    draft.position.set(10.2, phBed + 0.75, uw);
     group.add(draft);
   }
 
   // ---- tailrace guide walls
-  for (const [z0, z1] of [[-72.6, -71.2], [-65.4, -66.8]]) {
+  for (const [w0, w1] of [[27.6, 26.2], [20.4, 21.8]]) {
     const wall = new THREE.Mesh(new THREE.BoxGeometry(6.2, 1.7, 0.4), concDark);
-    const mx = 61.4;
-    const mz = (z0 + z1) / 2;
-    wall.position.set(mx, bedAt(mx, mz) + 0.6, mz);
-    wall.rotation.y = Math.atan2(z1 - z0, 6.2) * -1;
+    const mu = 21.4;
+    const mw = (w0 + w1) / 2;
+    wall.position.set(mu, damBed(mu, mw) + 0.6, mw);
+    wall.rotation.y = Math.atan2(w1 - w0, 6.2) * -1;
     wall.castShadow = wall.receiveShadow = true;
     group.add(wall);
   }
@@ -300,10 +323,10 @@ export function buildPowerhouse(): PowerhouseProps {
   // ---- transformer yard + switch gantry
   const yard = new THREE.Group();
   const pad = new THREE.Mesh(new THREE.BoxGeometry(8.4, 0.22, 6.2), new THREE.MeshStandardMaterial({ color: 0x77726a, roughness: 0.98 }));
-  pad.position.set(61.2, bedAt(61.2, -58.5) + 0.11, -58.5);
+  pad.position.set(21.2, damBed(21.2, 13.5) + 0.11, 13.5);
   pad.receiveShadow = true;
   yard.add(pad);
-  for (const dz of [-60.2, -56.8]) {
+  for (const dw of [15.2, 11.8]) {
     const tr = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.7, 1.5), matGalvanised());
     body.position.y = 1.0;
@@ -319,50 +342,61 @@ export function buildPowerhouse(): PowerhouseProps {
       bush.position.set(bx, 2.1, 0);
       tr.add(bush);
     }
-    tr.position.set(60.2, pad.position.y, dz);
+    tr.position.set(20.2, pad.position.y, dw);
     yard.add(tr);
   }
   // switch gantry + first cable anchor
-  for (const dz of [-61.0, -56.0]) {
+  for (const dw of [16.0, 11.0]) {
     const col = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 7.0, 6), matGalvanised());
-    col.position.set(64.4, bedAt(64.4, dz) + 3.5, dz);
+    col.position.set(24.4, damBed(24.4, dw) + 3.5, dw);
     col.castShadow = true;
     yard.add(col);
   }
   const gBeam = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 5.4), matGalvanised());
-  gBeam.position.set(64.4, bedAt(64.4, -58.5) + 6.9, -58.5);
+  gBeam.position.set(24.4, damBed(24.4, 13.5) + 6.9, 13.5);
   yard.add(gBeam);
   group.add(yard);
 
-  // ---- transmission line: powerhouse → city substation
+  // ---- transmission line: powerhouse → town substation (down the NE bank)
   const cableMat = new THREE.MeshBasicMaterial({ color: 0x30343a });
-  const anchors: { x: number; z: number; h: number }[] = [
-    { x: 64.4, z: -58.5, h: 7.0 },
-    { x: 69.5, z: -51.0, h: 12.5 },
-    { x: 81.0, z: -34.0, h: 13.0 },
-    { x: 96.0, z: -12.0, h: 13.0 },
-    { x: 110.0, z: 6.0, h: 12.5 },
-    { x: 123.0, z: 21.0, h: 10.0 },
+  // local (u,w) anchors along the valley (w = -t)
+  const anchors: { u: number; w: number; h: number }[] = [
+    { u: 24.4, w: 13.5, h: 7.0 },
+    { u: 33, w: 12, h: 12.5 },
+    { u: 47, w: 10, h: 13.0 },
+    { u: 61, w: 8, h: 13.0 },
+    { u: 75, w: 6, h: 12.5 },
+    { u: 88, w: 5, h: 10.0 },
   ];
+  const toV = (a: { u: number; w: number; h: number }, frac: number): THREE.Vector3 => {
+    const [x, z] = damXZ(a.u, a.w);
+    return new THREE.Vector3(x, bedAt(x, z) + a.h * frac, z);
+  };
   for (let i = 1; i < anchors.length; i++) {
     const b = anchors[i];
     const py = makePylon(b.h);
-    const gB = bedAt(b.x, b.z);
-    py.position.set(b.x, gB - 0.2, b.z);
+    const [px, pz] = damXZ(b.u, b.w);
+    py.position.set(px, bedAt(px, pz) - 0.2, pz);
     group.add(py);
   }
   for (let i = 1; i < anchors.length; i++) {
     const a = anchors[i - 1];
     const b = anchors[i];
-    const ya = bedAt(a.x, a.z) + a.h * 0.9;
-    const yb = bedAt(b.x, b.z) + b.h * 0.9;
+    const ya = bedAt(...damXZ(a.u, a.w)) + a.h * 0.9;
+    const yb = bedAt(...damXZ(b.u, b.w)) + b.h * 0.9;
+    const [ax, az] = damXZ(a.u, a.w);
+    const [bx, bz] = damXZ(b.u, b.w);
     for (const off of [-1.1, 0, 1.1]) {
-      const n = new THREE.Vector3(-(b.z - a.z), 0, b.x - a.x).normalize().multiplyScalar(off);
-      const ca = new THREE.Vector3(a.x + n.x, ya, a.z + n.z);
-      const cb = new THREE.Vector3(b.x + n.x, yb, b.z + n.z);
+      const n = new THREE.Vector3(-(bz - az), 0, bx - ax).normalize().multiplyScalar(off);
+      const ca = new THREE.Vector3(ax + n.x, ya, az + n.z);
+      const cb = new THREE.Vector3(bx + n.x, yb, bz + n.z);
       group.add(makeCable(ca, cb, 1.4 + off * 0.1, cableMat));
     }
   }
+
+  // mount the whole powerhouse in the rotated corner frame
+  group.rotation.y = -Math.PI / 4;
+  group.position.set(DAM_S * SC, 0, DAM_S * SC - LZ / 2);
 
   return { group, rotors };
 }
@@ -370,48 +404,52 @@ export function buildPowerhouse(): PowerhouseProps {
 // ============================================================ CITY LAYOUT
 interface StreetSeg { pts: [number, number][]; w: number }
 
-// Square-canvas street network: riverside drive hugging the channel's south
-// bank (a CONSTANT +12.5 m offset from the drifting axis, so it never dips
-// into the incised channel), a city grid across the plain, north-bench service
-// road, farm tracks.
-const TOWN_STREETS: StreetSeg[] = [
-  // riverside drive (south bank of the river, tracks the axis drift;
-  // merges into the first east-west avenue at its east end)
-  { pts: [[52, -32.5], [64, -32.0], [76, -30.3], [88, -27.8], [100, -24.8], [112, -21.7], [124, -18.9], [134, -17.2]], w: 3.2 },
-  // north-bench service road (between channel and north rim)
-  { pts: [[56, -58], [70, -58.6], [84, -59], [98, -59.2], [112, -59.4], [126, -59.4], [140, -59], [152, -58.4]], w: 2.8 },
-  // city grid — east-west avenues
-  { pts: [[62, -18], [78, -18.2], [94, -18.4], [110, -18.4], [126, -18.2], [142, -18]], w: 3.0 },
-  { pts: [[64, -8], [80, -8.2], [96, -8.2], [112, -8], [128, -7.6], [144, -7.4]], w: 3.4 },
-  { pts: [[64, 2], [80, 2], [96, 2.2], [112, 2.4], [128, 2.6], [144, 2.8]], w: 3.4 },
-  { pts: [[68, 12], [84, 12.2], [100, 12.4], [116, 12.6], [132, 12.8], [146, 13]], w: 3.0 },
-  { pts: [[74, 22], [88, 22.2], [102, 22.4], [116, 22.8], [130, 23]], w: 2.8 },
-  { pts: [[80, 32], [94, 32.2], [108, 32.4], [122, 32.6], [136, 32.6]], w: 2.6 },
-  // city grid — north-south streets
-  { pts: [[72, -24], [72, -14], [72, -4], [72, 6], [72, 16]], w: 2.8 },
-  { pts: [[82, -24], [82, -14], [82, -4], [82, 6], [82, 16], [82, 26]], w: 3.0 },
-  { pts: [[92, -24], [92, -14], [92, -4], [92, 6], [92, 16], [92, 24]], w: 3.0 },
-  { pts: [[102, -22], [102, -12], [102, -2], [102, 8], [102, 18], [102, 28]], w: 3.0 },
-  { pts: [[112, -22], [112, -12], [112, -2], [112, 8], [112, 18], [112, 26]], w: 2.8 },
-  { pts: [[122, -22], [122, -12], [122, -2], [122, 8], [122, 18], [122, 30]], w: 3.0 },
-  { pts: [[132, -20], [132, -10], [132, 0], [132, 10], [132, 20], [132, 30]], w: 2.8 },
-  { pts: [[142, -16], [142, -6], [142, 4], [142, 14], [142, 22]], w: 2.6 },
-  // west quarter connector + market street
-  { pts: [[58, -12], [64, -11], [72, -10]], w: 2.2 },
-  { pts: [[58, 8], [66, 8.4], [74, 8.6]], w: 2.2 },
-  // farm lanes — southern belt
-  { pts: [[56, 40], [70, 41], [84, 42], [98, 43], [112, 44], [126, 44.5], [140, 45]], w: 2.2 },
-  { pts: [[64, 46], [66, 54], [68, 60]], w: 1.9 },
-  { pts: [[96, 45], [98, 52], [100, 58]], w: 1.9 },
-  { pts: [[122, 46], [120, 53], [118, 58]], w: 1.9 },
-  // SW lakeside lane (villages + orchards south of the reservoir)
-  { pts: [[24, -4], [28, 4], [32, 12], [36, 20], [40, 28]], w: 2.0 },
-  { pts: [[12, 10], [20, 14], [28, 18], [36, 22]], w: 1.8 },
-  // east approach toward the rim villages
-  { pts: [[146, 24], [150, 32], [152, 40]], w: 2.0 },
-];
+// Square-canvas street network authored in the rotated frame: riverside drive
+// hugging the channel's south-west bank (a CONSTANT 13 m offset from the
+// channel axis), town grid aligned to the diagonal, village lanes, industrial
+// spur, farm tracks and the north-south HIGHWAY crossing the river on the
+// bridge (reference layout).
+function buildStreets(): StreetSeg[] {
+  const streets: StreetSeg[] = [];
+  // riverside drive (SW bank of the channel, tracks the meander)
+  streets.push({ pts: range(76, 150, 7.5).map((s) => STP(s, axisT(s) - 13)), w: 3.2 });
+  // NE bank road (village + industrial side)
+  streets.push({ pts: range(78, 150, 7.5).map((s) => STP(s, axisT(s) + 15.5)), w: 3.0 });
+  // town grid — avenues (running down-valley)
+  for (const t of [-44, -36, -28]) {
+    streets.push({ pts: range(92, 152, 10).map((s) => STP(s, t)), w: 3.2 });
+  }
+  streets.push({ pts: range(124, 152, 7).map((s) => STP(s, -20)), w: 2.8 });
+  // town grid — cross streets (climbing from the bench road to the river drive)
+  for (const s of [96, 104, 112, 120, 128, 136, 144, 152]) {
+    streets.push({ pts: [STP(s, -48), STP(s, axisT(s) - 14.5)], w: 2.8 });
+  }
+  // village lanes (right bench, upstream of the town)
+  streets.push({ pts: range(78, 96, 4.5).map((s) => STP(s, axisT(s) + 11)), w: 2.2 });
+  streets.push({ pts: [[76, -18], [82, -15], [88, -12], [94, -10]].map(([s, t]) => STP(s, t)), w: 2.0 });
+  // dam access spur (village lane → dam NE abutment)
+  streets.push({ pts: [STP(76, -6), STP(70, -4), STP(64.5, -3)], w: 2.4 });
+  // industrial spur (from the NE bank road into the estate)
+  streets.push({ pts: range(104, 130, 6.5).map((s) => STP(s, 8)), w: 2.6 });
+  streets.push({ pts: [STP(112, 2), STP(112, 14)], w: 2.2 });
+  // farm lanes — agricultural bench (NE) + south-west bench
+  streets.push({ pts: range(86, 130, 7.5).map((s) => STP(s, 10)), w: 2.2 });
+  streets.push({ pts: range(92, 126, 8.5).map((s) => STP(s, 22)), w: 2.0 });
+  streets.push({ pts: range(104, 138, 8.5).map((s) => STP(s, -44)), w: 2.2 });
+  // HIGHWAY: north rim → river bridge → south rim (reference right-side road)
+  const hw: [number, number][] = [
+    [86, 84], [92, 68], [98, 52], [106, 34], [114, 16], [120, 0],
+    [126, -16], [132, -34], [138, -50], [144, -64], [150, -76],
+  ];
+  streets.push({ pts: hw.slice(0, 5).map(([s, t]) => STP(s, t)), w: 4.6 }); // north approach
+  streets.push({ pts: hw.slice(5).map(([s, t]) => STP(s, t)), w: 4.6 }); // south approach
+  return streets;
+}
+const TOWN_STREETS: StreetSeg[] = buildStreets();
+// the highway span over the river (deck drawn in buildTown)
+const HIGHWAY_SPAN: [number, number][] = [[114, 16], [120, 0], [126, -16], [130, -28]];
 
-// clearance network: every street / expressway segment buildings must dodge
+// clearance network: every street segment buildings must dodge
 interface ClearSeg { ax: number; az: number; bx: number; bz: number }
 const CLEAR_SEGS: ClearSeg[] = [];
 function pushClear(pts: [number, number][]): void {
@@ -419,20 +457,6 @@ function pushClear(pts: [number, number][]): void {
     CLEAR_SEGS.push({ ax: pts[i][0], az: pts[i][1], bx: pts[i + 1][0], bz: pts[i + 1][1] });
 }
 for (const st of TOWN_STREETS) pushClear(st.pts);
-
-// elevated expressway along the corridor's north bench + dam access ramps
-const EXP_A: [number, number][] = [[52, -62], [66, -63], [80, -63.6], [94, -64], [108, -64.2], [122, -64.2], [136, -63.8], [150, -63], [158, -62]];
-const RAMP_A1: [number, number][] = [[52, -62], [49, -66], [47, -70]]; // down to the dam bench (west end)
-const RAMP_A2: [number, number][] = [[158, -62], [160.5, -58], [161, -54]]; // east end exit ramp
-const RAMP_A3: [number, number][] = [[108, -64.2], [106, -61], [105, -58]]; // spur to the north-bench road
-pushClear(EXP_A);
-pushClear(RAMP_A1);
-pushClear(RAMP_A2);
-pushClear(RAMP_A3);
-
-// cross-river road bridges (decks drawn in buildTown; approaches here)
-const BRIDGE_W: [number, number][] = [[124, -56], [124, -48], [124, -40], [124, -34]];
-pushClear(BRIDGE_W);
 
 function distToPaths(x: number, z: number): number {
   let best = 1e9;
@@ -445,26 +469,28 @@ function distToPaths(x: number, z: number): number {
   return best;
 }
 
-// landmark / kept-site clearance rectangles (cx, cz, w, d)
+// landmark / kept-site clearance rectangles in the ROTATED frame (s, t, w, d)
 const CLEAR_RECTS: [number, number, number, number][] = [
-  [98, -8, 8, 8], [92, -4, 8, 7], [110, 17, 22, 15], // plaza+clock, market, pitch
-  [128, 14, 7, 7], [70, 6, 8, 7], [88, -14, 8, 7], // water tower, temple, park grove
-  // farms — southern belt
-  [56, 52, 13, 9], [72, 54, 13, 9], [90, 52, 12, 9], [108, 52, 12, 9], [124, 50, 12, 9], [140, 52, 11, 8],
-  // farms — SW lakeside quadrant
-  [18, 8, 11, 8], [30, 16, 10, 8], [20, 28, 10, 8], [34, 34, 9, 8],
-  [146, 40, 10, 8], // east orchard
+  [114, -22, 8, 8], [108, -18, 8, 7], [124, -32, 22, 15], // plaza+clock, market, pitch
+  [130, -22, 7, 7], [96, -30, 8, 7], [102, -24, 8, 7], // water tower, temple, park grove
+  // farms — agricultural bench (NE)
+  [88, 8, 12, 9], [96, 12, 12, 9], [104, 16, 12, 9], [112, 20, 12, 9],
+  [120, 24, 12, 9], [128, 28, 12, 9], [100, 28, 12, 9], [116, 32, 11, 8],
+  // farms — SW bench + lower east plain
+  [106, -44, 12, 9], [116, -42, 12, 9], [126, -44, 12, 9], [134, -42, 11, 8],
+  [146, -20, 11, 8], [156, -28, 11, 8], [164, -16, 11, 8],
   // civic landmark complexes (hospital / school / factory / waterworks / fuel)
-  [122, 10, 15, 11], [84, 12, 13, 11], [104, 35, 21, 12], [62, -34, 11, 10],
-  [140, 18, 9, 8], [134, -4, 10, 8], [126, 26, 9, 8],
-  // industrial estate warehouses (south-east civic band)
-  [118, 37, 13, 8], [129, 38.5, 13, 8], [140, 33, 13, 8],
+  [120, -14, 15, 11], [106, -26, 13, 11], [118, -38, 21, 12], [88, -36, 11, 10],
+  [132, -12, 10, 8], [128, -34, 9, 8], [146, -6, 12, 10],
+  // industrial estate warehouses (NE bench beside the river)
+  [106, 14, 13, 8], [114, 18, 13, 8], [122, 12, 13, 8],
   // landmark towers
-  [94, -12, 7, 7], [128, 0, 7, 7], [140, 26, 7, 7], [88, 8, 7, 7], [132, -12, 7, 7],
+  [110, -14, 7, 7], [128, -16, 7, 7], [136, -28, 7, 7], [104, -30, 7, 7], [124, -20, 7, 7],
 ];
 function clearOfSites(x: number, z: number, m = 1.4): boolean {
-  for (const [cx, cz, w, d] of CLEAR_RECTS)
-    if (Math.abs(x - cx) < w / 2 + m && Math.abs(z - cz) < d / 2 + m) return false;
+  const [s, t] = xz2st(x, z);
+  for (const [cs, ct, w, d] of CLEAR_RECTS)
+    if (Math.abs(s - cs) < w / 2 + m && Math.abs(t - ct) < d / 2 + m) return false;
   return true;
 }
 
@@ -514,74 +540,12 @@ function profileRibbon(
   return P;
 }
 
-function deckPiers(
-  group: THREE.Group, P: { x: number; z: number; y: number }[],
-  r: number, mat: THREE.Material, minH = 1.4,
-): void {
-  for (let i = 3; i < P.length - 2; i += 4) {
-    const g = bedAt(P[i].x, P[i].z);
-    const hh = P[i].y - g;
-    if (hh < minH) continue;
-    const pier = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.78, r, hh - 0.12, 8), mat);
-    pier.position.set(P[i].x, g + (hh - 0.12) / 2, P[i].z);
-    pier.castShadow = true;
-    group.add(pier);
-  }
-}
-
-// elevated expressway: deck on pylons following ground + hAbove, edge beams,
-// centre dashes, plus sloped ramps down to street level
-function buildExpressway(group: THREE.Group): void {
-  const deckMat = new THREE.MeshStandardMaterial({ color: 0x58585e, roughness: 0.88, metalness: 0.04, side: THREE.DoubleSide });
-  const beamMat = matConcreteDark();
-  const lineMat = new THREE.MeshStandardMaterial({ color: 0xd8d2b8, roughness: 0.8 });
-
-  const road = (pts: [number, number][], h0: number, h1: number, w: number): void => {
-    const P = profileRibbon(group, pts, w, deckMat, (x, z, t) => bedAt(x, z) + h0 + (h1 - h0) * t);
-    // edge beams slightly under the deck
-    profileRibbon(group, pts, w + 0.7, beamMat, (x, z, t) => bedAt(x, z) + h0 + (h1 - h0) * t - 0.16, false);
-    // pylons where the deck is well above ground (never in the river channel)
-    for (let i = 3; i < P.length - 2; i += 4) {
-      const g = bedAt(P[i].x, P[i].z);
-      const hh = P[i].y - g;
-      if (hh < 1.8 || Math.abs(P[i].z - axisAt(P[i].x)) < 14) continue;
-      const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.72, hh - 0.1, 0.72), beamMat);
-      pylon.position.set(P[i].x, g + (hh - 0.1) / 2, P[i].z);
-      pylon.castShadow = true;
-      group.add(pylon);
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, 0.3, 1.0), beamMat);
-      cap.position.set(P[i].x, P[i].y - 0.3, P[i].z);
-      group.add(cap);
-    }
-    // centre dashes (instanced)
-    const dashT: THREE.Matrix4[] = [];
-    for (let i = 2; i < P.length - 2; i += 3) {
-      const a = P[i], b = P[i + 1];
-      const yaw = Math.atan2(b.x - a.x, b.z - a.z);
-      const mm = new THREE.Matrix4();
-      mm.makeRotationY(yaw);
-      mm.setPosition(a.x, a.y + 0.04, a.z);
-      dashT.push(mm);
-    }
-    if (dashT.length) {
-      const dashMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.04, 1.7), lineMat, dashT.length);
-      dashT.forEach((mm, i) => dashMesh.setMatrixAt(i, mm));
-      group.add(dashMesh);
-    }
-  };
-
-  road(EXP_A, 5.4, 5.4, 5.0);    // corridor expressway (north bench, full length)
-  road(RAMP_A1, 5.4, 0.16, 3.4); // west down-ramp to the dam abutment bench
-  road(RAMP_A2, 5.4, 0.16, 3.4); // east exit ramp toward the rim villages
-  road(RAMP_A3, 5.4, 0.16, 3.0); // spur down to the north-bench service road
-}
-
 function flatRibbon(group: THREE.Group, pts: [number, number][], w: number, mat: THREE.Material, lift = 0.14): void {
   const pos: number[] = [];
   const idx: number[] = [];
   for (let i = 0; i < pts.length - 1; i++) {
-    for (let s = 0; s < 3; s++) {
-      const t0 = s / 3, t1 = (s + 1) / 3;
+    for (let k = 0; k < 3; k++) {
+      const t0 = k / 3, t1 = (k + 1) / 3;
       const x0 = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t0;
       const z0 = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t0;
       const x1 = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t1;
@@ -742,39 +706,48 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   const asphalt = new THREE.MeshStandardMaterial({ color: 0x8d8a82, roughness: 0.95 });
   const paving = new THREE.MeshStandardMaterial({ color: 0x9b968c, roughness: 0.95 });
 
-  // city street grid + riverside drive + farm lanes
+  // city street grid + riverside drive + farm lanes + highway
   for (const st of TOWN_STREETS) flatRibbon(group, st.pts, st.w, asphalt);
 
-  // ---- elevated expressway + ramps along the corridor bench
-  buildExpressway(group);
-
-  // ---- road bridge across the river at x = 124 (the config 'bridge' pin)
+  // ---- HIGHWAY BRIDGE across the river (the config 'bridge' pin) ----------
   {
-    const bx = 124;
-    const deckY = bedAt(bx, -42) + 3.4;
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.5, 30), matConcrete());
-    deck.position.set(bx, deckY, -41);
+    const A = HIGHWAY_SPAN[0], B = HIGHWAY_SPAN[3];
+    const [ax, az] = STP(...A);
+    const [bx, bz] = STP(...B);
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+    const len = Math.hypot(bx - ax, bz - az) + 6;
+    const yaw = Math.atan2(bx - ax, bz - az);
+    const midBed = bedAt(...STP(122, axisT(122)));
+    const deckY = midBed + 4.4;
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.5, len), matConcrete());
+    deck.position.set(mx, deckY, mz);
+    deck.rotation.y = yaw;
     deck.castShadow = deck.receiveShadow = true;
     group.add(deck);
-    const deckRoad = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.06, 30), asphalt);
-    deckRoad.position.set(bx, deckY + 0.28, -41);
+    const deckRoad = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.06, len), asphalt);
+    deckRoad.position.set(mx, deckY + 0.28, mz);
+    deckRoad.rotation.y = yaw;
     group.add(deckRoad);
+    const railMat = new THREE.MeshStandardMaterial({ color: 0xd8d2b8, roughness: 0.8 });
     for (const s of [-1, 1]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.5, 30), new THREE.MeshStandardMaterial({ color: 0xd8d2b8, roughness: 0.8 }));
-      rail.position.set(bx + s * 1.85, deckY + 0.55, -41);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.5, len), railMat);
+      rail.position.set(mx + Math.cos(yaw) * 2.3 * s, deckY + 0.55, mz - Math.sin(yaw) * 2.3 * s);
+      rail.rotation.y = yaw;
       group.add(rail);
     }
-    for (const zc of [-48, -34]) {
-      const g = bedAt(bx, zc);
+    // piers down to the bed near the two banks
+    for (const f of [0.3, 0.7]) {
+      const px = ax + (bx - ax) * f, pz = az + (bz - az) * f;
+      const g = bedAt(px, pz);
       const hh = deckY - g + 0.6;
       const pier = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.7, hh, 8), matConcrete());
-      pier.position.set(bx, g + hh / 2 - 0.3, zc);
+      pier.position.set(px, g + hh / 2 - 0.3, pz);
       pier.castShadow = true;
       group.add(pier);
     }
-    // approach fills
-    flatRibbon(group, [[124, -26], [124, -18.9]], 3.0, asphalt);
-    flatRibbon(group, [[124, -55.6], [124, -58.6]], 3.0, asphalt);
+    // approach fills joining the highway ribbons
+    flatRibbon(group, [STP(...HIGHWAY_SPAN[0]), STP(...HIGHWAY_SPAN[1])], 4.6, asphalt, 0.9);
+    flatRibbon(group, [STP(...HIGHWAY_SPAN[2]), STP(...HIGHWAY_SPAN[3])], 4.6, asphalt, 0.9);
   }
 
   // ---- dense districts (instanced, three building classes)
@@ -788,29 +761,28 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   const spotsM: BSpot[] = [];
   const spotsH: BSpot[] = [];
 
-  // deterministic scatter — SQUARE GRID DISTRICTS filling the city plain:
-  // towers in the core, mid-rise east, terraced low-rise and villages around
-  const DISTRICTS: { x0: number; z0: number; x1: number; z1: number; mix: 'core' | 'mid' | 'low' | 'village' }[] = [
-    { x0: 78, z0: -21, x1: 112, z1: 14, mix: 'core' },
-    { x0: 60, z0: -21, x1: 76, z1: 16, mix: 'low' },
-    { x0: 114, z0: -21, x1: 148, z1: 15, mix: 'mid' },
-    { x0: 66, z0: 17, x1: 100, z1: 33, mix: 'low' },
-    { x0: 102, z0: 17, x1: 146, z1: 31, mix: 'low' },
-    { x0: 114, z0: 34, x1: 148, z1: 45, mix: 'village' },
-    { x0: 8, z0: 0, x1: 44, z1: 42, mix: 'village' },
-    // riverbank hamlet on the north bench upstream of the city (the reference
-    // VILLAGE — houses strung along the bench road inside the wooded slope)
-    { x0: 60, z0: -66, x1: 92, z1: -54, mix: 'village' },
+  // deterministic scatter — districts fill the town plain on the SW bank plus
+  // the village bench (NE) and the lower floodplain; t-bands marked `rel` are
+  // resolved relative to the channel axis per-s
+  const DISTRICTS: { s0: number; s1: number; t0: number; t1: number; mix: 'core' | 'mid' | 'low' | 'village'; rel?: 'ne' | 'sw' }[] = [
+    { s0: 102, s1: 132, t0: -40, t1: -24, mix: 'core' },
+    { s0: 112, s1: 140, t0: -24, t1: -15, mix: 'mid' },
+    { s0: 92, s1: 104, t0: -46, t1: -25, mix: 'low' },
+    { s0: 116, s1: 148, t0: -48, t1: -41, mix: 'low' },
+    { s0: 78, s1: 96, t0: 13, t1: 24, mix: 'village', rel: 'ne' },
+    { s0: 106, s1: 132, t0: 4, t1: 15, mix: 'village' },
+    { s0: 138, s1: 158, t0: -27, t1: -16, mix: 'village', rel: 'sw' },
   ];
   let seed = 1;
   const nextRnd = () => hashRnd(seed++ * 12.9898);
   for (const d of DISTRICTS) {
     const step = d.mix === 'village' ? 6.2 : 4.6;
-    for (let gz = d.z0; gz <= d.z1; gz += step) {
-      for (let gx = d.x0; gx <= d.x1; gx += step) {
-        const x = gx + (nextRnd() - 0.5) * 2.2;
-        const z = gz + (nextRnd() - 0.5) * 2.2;
-        if (Math.abs(z - axisAt(x)) < 12.8) continue; // river channel
+    for (let gs = d.s0; gs <= d.s1; gs += step) {
+      const t0 = d.rel === 'ne' ? axisT(gs) + d.t0 : d.rel === 'sw' ? axisT(gs) + d.t0 : d.t0;
+      const t1 = d.rel === 'ne' ? axisT(gs) + d.t1 : d.rel === 'sw' ? axisT(gs) + d.t1 : d.t1;
+      for (let gt = t0; gt <= t1; gt += step) {
+        const [x, z] = STP(gs, gt);
+        if (Math.abs(gt - axisT(gs)) < 12.8) continue; // river channel
         if (distToPaths(x, z) < 2.7) continue;
         if (!clearOfSites(x, z)) continue;
         const ground = bedAt(x, z);
@@ -819,8 +791,8 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
         if (slope > 2.4) continue;
         if (nextRnd() < (d.mix === 'village' ? 0.3 : 0.08)) continue;
         const rot = d.mix === 'village'
-          ? nextRnd() * Math.PI
-          : (nextRnd() - 0.5) * 0.12;
+          ? -Math.PI / 4 + (nextRnd() - 0.5) * 0.8
+          : -Math.PI / 4 + (nextRnd() - 0.5) * 0.12;
         const roll = nextRnd();
         if (d.mix === 'core' && roll < 0.26) {
           spotsH.push({ x, z, w: 3.9 + nextRnd() * 1.6, d: 3.5 + nextRnd() * 1.5, h: 13.5 + nextRnd() * 9, rot, tone: Math.floor(nextRnd() * glassTones.length), ground });
@@ -884,9 +856,6 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   buildClass(spotsH, glassMat, glassTones, false);
 
   // ---- flood rubble along the wave's path ---------------------------------
-  // broken slabs, wall chunks and timbers beside every building + streaked
-  // along the low-ground corridor the destructive wave travels. Hidden at
-  // rest; the engine surfaces each piece as depth + velocity arrive.
   const rubbleSpots: { x: number; z: number; ground: number }[] = [];
   const rubbleElems: number[] = [];
   const pushRubble = (x: number, z: number, ground: number, big: number): void => {
@@ -905,11 +874,13 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     pushRubble(sp.x + 1.1 + hashRnd(sp.x + sp.z), sp.z + 0.9 + hashRnd(sp.z * 2 + sp.x), sp.ground, sp.h > 8 ? 1.5 : 1);
     pushRubble(sp.x - 1.0 + hashRnd(sp.x * 2 + sp.z), sp.z - 1.2 + hashRnd(sp.x + sp.z * 3), sp.ground, sp.h > 8 ? 1.3 : 0.9);
   }
-  // corridor streaks: the wave picks up wreckage along the channel banks,
-  // stilling basin and floodplain on its way through the city
-  for (let k = 0; k < 260; k++) {
-    const x = 46 + hashRnd(k * 17.7) * 106;
-    const z = axisAt(x) + (hashRnd(k * 7.3) - 0.5) * 46;
+  // corridor streaks: wreckage along the channel banks, stilling basin and
+  // floodplain on the wave's way to the bottom-right exit
+  for (let k = 0; k < 280; k++) {
+    const s = 68 + hashRnd(k * 17.7) * 156;
+    const t = axisT(s) + (hashRnd(k * 7.3) - 0.5) * 46;
+    const [x, z] = STP(s, t);
+    if (x < 2 || x > 158 || z < -78 || z > 78) continue;
     const g = bedAt(x, z);
     if (g < 2.8 || g > 9.5) continue;
     pushRubble(x + (hashRnd(k * 3.1) - 0.5) * 3, z + (hashRnd(k * 11.9) - 0.5) * 3, g, 0.8 + hashRnd(k * 5.7) * 0.9);
@@ -943,14 +914,17 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
 
   // ---- landmark skyline towers (glass shafts + crowns + aviation beacons)
   const beaconMat = new THREE.MeshStandardMaterial({ color: 0xff5540, emissive: 0xcc2200, emissiveIntensity: 1.4, roughness: 0.4 });
-  for (const [tx, tz, th, gi] of [
-    [94, -12, 24, 0], [128, 0, 21, 1], [140, 26, 18, 0], [88, 8, 19, 1], [132, -12, 16, 0],
+  for (const [ts, tt, th, gi] of [
+    [110, -14, 24, 0], [128, -16, 21, 1], [136, -28, 18, 0], [104, -30, 19, 1], [124, -20, 16, 0],
   ] as const) {
+    const [tx, tz] = STP(ts, tt);
     const tg = bedAt(tx, tz);
     const shaft = new THREE.Mesh(new THREE.BoxGeometry(4.4, th, 4.0), gi ? glassMat : midMat);
+    shaft.rotation.y = -Math.PI / 4;
     shaft.position.y = th / 2 - 0.1;
     shaft.castShadow = shaft.receiveShadow = true;
     const crown = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.6, 4.4), matConcreteDark());
+    crown.rotation.y = -Math.PI / 4;
     crown.position.y = th + 0.2;
     crown.castShadow = true;
     const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.11, 3.0, 6), matSteel());
@@ -963,12 +937,16 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     group.add(tG);
   }
 
-  // ---- city + forest trees (instanced, floodable — engine tilts them in
+    // ---- city + forest trees (instanced, floodable — engine tilts them in
   // high-velocity flow) — street lines, district groves, riverbank gallery,
-  // rim forest belts
+  // flank forests + the gorge woodland (reference FOREST AREA)
   let floodTrees: FloodTrees;
   {
     const treeSpots: { x: number; z: number; s: number }[] = [];
+    const inChannel = (x: number, z: number): number => {
+      const [s, t] = xz2st(x, z);
+      return Math.abs(t - axisT(s));
+    };
     // street tree lines along the avenues
     for (const st of TOWN_STREETS) {
       if (st.w < 2.6) continue;
@@ -980,10 +958,9 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
         for (let k = 0; k < nT; k++) {
           const t = (k + 0.5) / nT;
           for (const side of [1, -1]) {
-            const px = ax + (bx - ax) * t + Math.cos(0) * 0; // jitter below
-            const x = px + (hashRnd(ax * 7 + k * 3) - 0.5) * 1.4;
+            const x = ax + (bx - ax) * t + (hashRnd(ax * 7 + k * 3) - 0.5) * 1.4;
             const z = az + (bz - az) * t + side * 2.3 + (hashRnd(x * 3 + az) - 0.5);
-            if (Math.abs(z - axisAt(x)) < 13) continue;
+            if (inChannel(x, z) < 13) continue;
             if (distToPaths(x, z) < 2.4) continue;
             if (hashRnd(x * 5.1 + z * 3.3) < 0.35) continue;
             const ground = bedAt(x, z);
@@ -995,10 +972,13 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     }
     // groves filling district blocks
     for (const d of DISTRICTS) {
-      for (let k = 0; k < Math.floor(((d.x1 - d.x0) * (d.z1 - d.z0)) / 46); k++) {
-        const x = d.x0 + hashRnd(k * 13.3 + d.x0) * (d.x1 - d.x0);
-        const z = d.z0 + hashRnd(k * 7.7 + d.z0 * 2) * (d.z1 - d.z0);
-        if (Math.abs(z - axisAt(x)) < 13) continue;
+      const area = (d.s1 - d.s0) * (d.t1 - d.t0);
+      for (let k = 0; k < Math.floor(area / 46); k++) {
+        const gs = d.s0 + hashRnd(k * 13.3 + d.s0) * (d.s1 - d.s0);
+        const gt0 = d.rel ? axisT(gs) + d.t0 : d.t0;
+        const gt = gt0 + hashRnd(k * 7.7 + d.s0 * 2) * (d.t1 - d.t0);
+        const [x, z] = STP(gs, gt);
+        if (inChannel(x, z) < 13) continue;
         if (distToPaths(x, z) < 3.2) continue;
         if (!clearOfSites(x, z, 0.4)) continue;
         const ground = bedAt(x, z);
@@ -1007,26 +987,31 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
         treeSpots.push({ x, z, s: 0.75 + hashRnd(x * 5 + z) * 0.7 });
       }
     }
-    // riverbank gallery — broadleaf along both banks of the downstream channel
-    for (let x = 54; x <= 152; x += 3.1) {
-      const az = axisAt(x);
+    // riverbank gallery — broadleaf along both banks of the diagonal channel
+    for (let s = 76; s <= 218; s += 3.1) {
+      const az = axisT(s);
       for (const side of [1, -1]) {
-        const z = az + side * (14 + hashRnd(x * side) * 4.5);
-        // keep the gallery out of the north-bench farm plots
-        if (side < 0 && x > 90 && z > -57 && z < -46) continue;
+        const [x, z] = STP(s, az + side * (14 + hashRnd(s * side) * 4.5));
+        if (x < 2 || x > 158 || z < -78 || z > 78) continue;
+        // keep the gallery out of the farm plots on the NE bench
+        if (side > 0) {
+          const [fs, ft] = xz2st(x, z);
+          if (fs > 86 && fs < 132 && ft > 4 && ft < 36) continue;
+        }
         const g = bedAt(x, z);
         if (g < 3.4 || g > 16) continue;
         if (nearHouse(x, z)) continue;
-        if (hashRnd(x * 3.7 + side * 11) < 0.5) continue;
-        treeSpots.push({ x, z, s: 0.95 + hashRnd(x * side * 2) * 0.7 });
+        if (hashRnd(s * 3.7 + side * 11) < 0.5) continue;
+        treeSpots.push({ x, z, s: 0.95 + hashRnd(s * side * 2) * 0.7 });
       }
     }
-    // north-slope forest — dense woodland on the bench slope between the
-    // expressway and the north rim, wrapping the upstream hamlet (reference
-    // FOREST AREA); the village reads as carved out of the woods
-    for (let x = 52; x <= 114; x += 2.1) {
-      for (let z = -73; z <= -64; z += 2.1) {
-        if (Math.abs(z - axisAt(x)) < 14.5) continue;
+    // gorge woodland — dense forest on the slopes between the dam toe and the
+    // village (reference FOREST AREA, upper-left of centre)
+    for (let gs = 70; gs <= 98; gs += 2.1) {
+      for (let gt = -46; gt <= 30; gt += 2.1) {
+        if (Math.abs(gt - axisT(gs)) < 15) continue;
+        const [x, z] = STP(gs, gt);
+        if (x < 2 || x > 158 || z < -78 || z > 78) continue;
         if (distToPaths(x, z) < 2.5) continue;
         if (nearHouse(x, z, 3.0)) continue;
         const g = bedAt(x, z);
@@ -1038,22 +1023,23 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
         treeSpots.push({ x: x + (hashRnd(x + z) - 0.5) * 1.6, z: z + (hashRnd(x * 2 + z) - 0.5) * 1.6, s: 1.1 + h * 0.9 });
       }
     }
-    // rim forest belts — north rim, west headwall shoulders, east rim,
-    // reservoir south shore — dense woodland framing the canvas
+    // flank forest belts — the big green ranges framing the floodplain plus
+    // the canvas rims, dense woodland everywhere the slopes are gentle
     for (let x = 8; x <= 154; x += 2.3) {
       for (let z = -78; z <= 78; z += 2.3) {
-        const rimD = Math.min(x, LX - x, -(z + 74), z - 70);
+        const [s, t] = xz2st(x, z);
+        const rimD = Math.min(x, LX - x, z + 74, 74 - z);
+        const wallD = s > DAM_TOE_S ? Math.abs(t - axisT(s)) - 20 : 0;
+        const inFlank = s > DAM_TOE_S + 6 && wallD > 6 && wallD < 70;
         const inRim = rimD > -4;
-        const westShore = x < 42 && z > -10 && z < 2;
-        const swWoods = x < 44 && z > 24 && z < 46 && Math.abs(z - axisAt(x)) > 14;
-        if (!inRim && !westShore && !swWoods) continue;
-        if (Math.abs(z - axisAt(x)) < 14.5) continue; // keep the river gorge open
+        if (!inFlank && !inRim) continue;
+        if (inChannel(x, z) < 15) continue; // keep the river gorge open
         const g = bedAt(x, z);
         if (g < 9 || g > 34) continue;
         const slope = Math.abs(bedAt(x + 2, z) - g) + Math.abs(bedAt(x, z + 2) - g);
-        if (slope > 2.2) continue;
+        if (slope > 2.9) continue;
         const h = hashRnd(x * 12.7 + z * 5.3);
-        if (h < (inRim ? 0.58 : 0.52)) continue;
+        if (h < (inRim ? 0.58 : 0.5)) continue;
         treeSpots.push({ x: x + (hashRnd(x + z) - 0.5) * 1.8, z: z + (hashRnd(x * 2 + z) - 0.5) * 1.8, s: 1.15 + h * 0.9 });
       }
     }
@@ -1085,11 +1071,12 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   }
 
   // ---- landmarks
-  // clock tower + plaza (city heart)
+  // clock tower + plaza (town heart, SW bank)
   const plaza = new THREE.Mesh(new THREE.CircleGeometry(5.2, 26), paving);
   plaza.rotation.x = -Math.PI / 2;
-  const pzG = bedAt(98, -8);
-  plaza.position.set(98, pzG + 0.16, -8);
+  const [pzX, pzZ] = STP(114, -22);
+  const pzG = bedAt(pzX, pzZ);
+  plaza.position.set(pzX, pzG + 0.16, pzZ);
   plaza.receiveShadow = true;
   group.add(plaza);
   const towerG = new THREE.Group();
@@ -1120,12 +1107,13 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   const finial = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd8b23a, roughness: 0.35, metalness: 0.6 }));
   finial.position.y = 12.45;
   towerG.add(spire, finial);
-  towerG.position.set(98, pzG, -8);
+  towerG.position.set(pzX, pzG, pzZ);
   group.add(towerG);
 
   // water tower (east district)
   const wt = new THREE.Group();
-  const wtG = bedAt(128, 14);
+  const [wtX, wtZ] = STP(130, -22);
+  const wtG = bedAt(wtX, wtZ);
   for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 8.4, 6), matSteel());
     leg.position.set(sx * 1.15, 4.2, sz * 1.15);
@@ -1143,12 +1131,14 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   const riser = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 8.4, 6), matDark());
   riser.position.set(-1.45, 4.2, 0);
   wt.add(riser);
-  wt.position.set(128, wtG, 14);
+  wt.position.set(wtX, wtG, wtZ);
+  wt.rotation.y = -Math.PI / 4;
   group.add(wt);
 
   // market canopy (core, off the high street)
   const mk = new THREE.Group();
-  const mkG = bedAt(92, -4);
+  const [mkX, mkZ] = STP(108, -18);
+  const mkG = bedAt(mkX, mkZ);
   for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.7, 6), matSteel());
     post.position.set(sx * 3.6, 1.35, sz * 2.2);
@@ -1168,7 +1158,8 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     stall.castShadow = true;
     mk.add(stall);
   }
-  mk.position.set(92, mkG, -4);
+  mk.position.set(mkX, mkG, mkZ);
+  mk.rotation.y = -Math.PI / 4;
   group.add(mk);
 
   // football pitch
@@ -1177,20 +1168,23 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     new THREE.MeshStandardMaterial({ map: makePitchTex(), roughness: 0.95 }),
   );
   pitch.rotation.x = -Math.PI / 2;
-  pitch.rotation.z = 0.06;
-  const piG = bedAt(110, 17);
-  pitch.position.set(110, piG + 0.12, 17);
+  pitch.rotation.z = -Math.PI / 4 + 0.06;
+  const [piX, piZ] = STP(124, -32);
+  const piG = bedAt(piX, piZ);
+  pitch.position.set(piX, piG + 0.12, piZ);
   pitch.receiveShadow = true;
   group.add(pitch);
   for (const s of [-1, 1]) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.5, 0.08), matWhite());
-    post.position.set(110 + s * 9.2, piG + 0.75, 17);
+    post.rotation.y = -Math.PI / 4;
+    post.position.set(piX + s * 9.2 * SC, piG + 0.75, piZ + s * 9.2 * SC);
     group.add(post);
   }
 
   // temple shrine (west quarter)
   const tp = new THREE.Group();
-  const tpG = bedAt(70, 6);
+  const [tpX, tpZ] = STP(96, -30);
+  const tpG = bedAt(tpX, tpZ);
   const body = new THREE.Mesh(new THREE.BoxGeometry(4.0, 2.6, 3.2), new THREE.MeshStandardMaterial({ color: 0xd8c9a8, roughness: 0.9 }));
   body.position.y = 1.3;
   body.castShadow = true;
@@ -1206,14 +1200,16 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 0.6), new THREE.MeshStandardMaterial({ color: 0xd85a28, roughness: 0.8, side: THREE.DoubleSide }));
   flag.position.set(3.1, 4.8, 0);
   tp.add(body, s1, s2, flagPole, flag);
-  tp.position.set(70, tpG, 6);
+  tp.position.set(tpX, tpG, tpZ);
+  tp.rotation.y = -Math.PI / 4;
   group.add(tp);
 
   // park grove + benches
   const leafMat = new THREE.MeshStandardMaterial({ color: 0x2f5d33, roughness: 0.92, flatShading: true });
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.95 });
-  const parkSpots: [number, number][] = [[86, -16], [88, -13], [85, -12], [90, -17], [87, -18]];
-  for (const [px, pz] of parkSpots) {
+  const parkSpots: [number, number][] = [[102, -25], [104, -22.5], [101, -22], [105, -27], [103, -28]];
+  for (const [ps, pt] of parkSpots) {
+    const [px, pz] = STP(ps, pt);
     const g = bedAt(px, pz);
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.2, 1.8, 6), trunkMat);
     trunk.position.set(px, g + 0.9, pz);
@@ -1223,10 +1219,11 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     blob.castShadow = true;
     group.add(trunk, blob);
   }
-  for (const [bx, bz, r] of [[101, -5.5, 0.4], [95, -10.5, -0.6]] as const) {
+  for (const [bs, bt, r] of [[116, -20.5, 0.4], [111, -25.5, -0.6]] as const) {
+    const [bx, bz] = STP(bs, bt);
     const bench = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 0.5), trunkMat);
     bench.position.set(bx, bedAt(bx, bz) + 0.45, bz);
-    bench.rotation.y = r;
+    bench.rotation.y = r - Math.PI / 4;
     group.add(bench);
   }
 
@@ -1259,20 +1256,20 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   poles.castShadow = true;
   group.add(poles, heads);
 
-  // ---- farmland: crop fields, farmsteads, hay bales -----------------------
-  // southern belt + SW lakeside quadrant + east orchard — the same plots the
-  // terrain painter stains as farmland, so soil colour and props agree
+    // ---- farmland: crop fields, farmsteads, hay bales -----------------------
+  // agricultural bench (NE), SW bench and the lower east plain — the same
+  // plots the terrain painter stains as farmland, so soil colour and props
+  // agree. Fields are rotated 45° to align with the valley grain.
   {
-    const FARMS: { x: number; z: number; w: number; d: number; k: number }[] = [
-      { x: 56, z: 52, w: 13, d: 9, k: 0 }, { x: 72, z: 54, w: 13, d: 9, k: 1 },
-      { x: 90, z: 52, w: 12, d: 9, k: 2 }, { x: 108, z: 52, w: 12, d: 9, k: 0 },
-      { x: 124, z: 50, w: 12, d: 9, k: 1 }, { x: 140, z: 52, w: 11, d: 8, k: 2 },
-      { x: 18, z: 8, w: 11, d: 8, k: 1 }, { x: 30, z: 16, w: 10, d: 8, k: 2 },
-      { x: 20, z: 28, w: 10, d: 8, k: 0 }, { x: 34, z: 34, w: 9, d: 8, k: 1 },
-      { x: 146, z: 40, w: 10, d: 8, k: 2 }, // east orchard plot
-      // north-bench patchwork (reference AGRICULTURAL LAND, upper-right)
-      { x: 98, z: -52, w: 10, d: 6, k: 1 }, { x: 114, z: -53, w: 10, d: 6, k: 0 },
-      { x: 130, z: -52, w: 10, d: 6, k: 2 }, { x: 144, z: -51, w: 9, d: 6, k: 1 },
+    const FARMS: { s: number; t: number; w: number; d: number; k: number }[] = [
+      { s: 88, t: 8, w: 12, d: 9, k: 0 }, { s: 96, t: 12, w: 12, d: 9, k: 1 },
+      { s: 104, t: 16, w: 12, d: 9, k: 2 }, { s: 112, t: 20, w: 12, d: 9, k: 0 },
+      { s: 120, t: 24, w: 12, d: 9, k: 1 }, { s: 128, t: 28, w: 12, d: 9, k: 2 },
+      { s: 100, t: 28, w: 11, d: 8, k: 1 }, { s: 116, t: 32, w: 11, d: 8, k: 0 },
+      { s: 106, t: -44, w: 12, d: 9, k: 1 }, { s: 116, t: -42, w: 12, d: 9, k: 2 },
+      { s: 126, t: -44, w: 12, d: 9, k: 0 }, { s: 134, t: -42, w: 11, d: 8, k: 1 },
+      { s: 146, t: -20, w: 11, d: 8, k: 2 }, { s: 156, t: -28, w: 11, d: 8, k: 0 },
+      { s: 164, t: -16, w: 11, d: 8, k: 1 },
     ];
     const fieldMats = [
       new THREE.MeshStandardMaterial({ map: makeFieldTex('#8a7a3d', '#79692f'), roughness: 0.95 }), // ripe grain
@@ -1291,27 +1288,30 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     const hays = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.42, 0.42, 0.62, 9), hayMat, 26);
     let hi = 0;
     FARMS.forEach((f, fi) => {
-      const g = bedAt(f.x, f.z);
-      const fRot = (hashRnd(fi * 3.3) - 0.5) * 0.16;
+      const [fx, fz] = STP(f.s, f.t);
+      const g = bedAt(fx, fz);
+      const fRot = -Math.PI / 4 + (hashRnd(fi * 3.3) - 0.5) * 0.16;
       const field = new THREE.Mesh(new THREE.PlaneGeometry(f.w, f.d), fieldMats[f.k]);
       field.rotation.x = -Math.PI / 2;
       field.rotation.z = fRot;
-      field.position.set(f.x, g + 0.09, f.z);
+      field.position.set(fx, g + 0.09, fz);
       field.receiveShadow = true;
       group.add(field);
       // crop rows spanning the patch (instanced, tinted per crop)
       eu.set(0, fRot, 0);
       q.setFromEuler(eu);
+      const dX = Math.cos(fRot), dZ = -Math.sin(fRot); // across-patch direction
       for (let k = 0; k < 7; k++) {
-        const zz = f.z + ((k + 0.5) / 7 - 0.5) * f.d * 0.82;
-        m4.compose(new THREE.Vector3(f.x, g + 0.16, zz), q, new THREE.Vector3(f.w * 0.9, 1, 0.5));
+        const off = ((k + 0.5) / 7 - 0.5) * f.d * 0.82;
+        m4.compose(new THREE.Vector3(fx - dZ * off, g + 0.16, fz + dX * off), q, new THREE.Vector3(f.w * 0.9, 1, 0.5));
         cropRows.setMatrixAt(ri, m4);
         cropRows.setColorAt(ri, col.setHex(cropColors[f.k]));
         ri++;
       }
       // farmstead: barn + silo at the south edge, clear of the lane
-      const bx = f.x + (hashRnd(fi * 7.7) - 0.5) * f.w * 0.3;
-      const bz = f.z + f.d * 0.62;
+      const bs = f.s + (hashRnd(fi * 7.7) - 0.5) * f.w * 0.3;
+      const bt = f.t + f.d * 0.62;
+      const [bx, bz] = STP(bs, bt);
       const barn = new THREE.Group();
       const hall = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.7, 2.0), barnMat);
       hall.position.y = 0.85;
@@ -1329,13 +1329,14 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
       cap.position.set(2.1, 2.8, 0.3);
       barn.add(hall, r1, r2, silo, cap);
       barn.position.set(bx, bedAt(bx, bz), bz);
-      barn.rotation.y = hashRnd(fi * 5.1) * Math.PI * 2;
+      barn.rotation.y = -Math.PI / 4 + hashRnd(fi * 5.1) * Math.PI * 2;
       group.add(barn);
       // hay bales
       const nH = 2 + Math.floor(hashRnd(fi * 9.9) * 2);
       for (let k = 0; k < nH && hi < 26; k++) {
-        const hx = f.x + (hashRnd(fi * 13 + k) - 0.5) * f.w;
-        const hz = f.z - f.d * 0.55 + (hashRnd(fi * 17 + k) - 0.5) * 2;
+        const hs = f.s + (hashRnd(fi * 13 + k) - 0.5) * f.w;
+        const ht = f.t - f.d * 0.55 + (hashRnd(fi * 17 + k) - 0.5) * 2;
+        const [hx, hz] = STP(hs, ht);
         m4.makeTranslation(hx, bedAt(hx, hz) + 0.42, hz);
         m4.multiply(new THREE.Matrix4().makeRotationY(hashRnd(hx * 3 + hz) * Math.PI));
         hays.setMatrixAt(hi++, m4);
@@ -1348,11 +1349,10 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     hays.count = hi;
     hays.castShadow = true;
     group.add(hays);
-    // east orchard — row-planted fruit trees on the east plot
+    // orchard — row-planted fruit trees on the lower east plot
     for (let ox = 0; ox < 4; ox++) {
       for (let oz = 0; oz < 3; oz++) {
-        const tx = 142 + ox * 2.6;
-        const tz = 37 + oz * 2.8;
+        const [tx, tz] = STP(160 + ox * 2.6, -20 + oz * 2.8);
         const g = bedAt(tx, tz);
         const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.14, 1.1, 5), trunkMat);
         trunk.position.set(tx, g + 0.55, tz);
@@ -1368,35 +1368,43 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   // hospital, school, factory, waterworks, fuel depot, substation, civic hall
   // (each tucked inside its reserved clear rect, dodging the street grid)
   const civicRed = new THREE.MeshStandardMaterial({ color: 0xc24338, roughness: 0.7 });
+  const YAW = -Math.PI / 4;
 
-  // hospital — white slab + rooftop cross + entrance canopy (NE quadrant)
+  // hospital — white slab + rooftop cross + entrance canopy (town core)
   {
-    const hx = 126.8, hz = 7.4;
+    const [hx, hz] = STP(120, -14);
     const g = bedAt(hx, hz);
     const slab = new THREE.Mesh(new THREE.BoxGeometry(5.8, 5.6, 3.4), matWhite());
+    slab.rotation.y = YAW;
     slab.position.set(hx, g + 2.8, hz);
     slab.castShadow = slab.receiveShadow = true;
     const wing = new THREE.Mesh(new THREE.BoxGeometry(4.0, 3.2, 3.0), matWhite());
+    wing.rotation.y = YAW;
     wing.position.set(hx, g + 1.6, hz - 2.5);
     wing.castShadow = true;
     const c1 = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.14, 0.4), civicRed);
     const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.14, 1.5), civicRed);
+    c1.rotation.y = YAW;
+    c2.rotation.y = YAW;
     c1.position.set(hx, g + 5.85, hz);
     c2.position.set(hx, g + 5.85, hz);
     const canopy = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 1.6), matConcrete());
+    canopy.rotation.y = YAW;
     canopy.position.set(hx, g + 2.6, hz + 2.4);
     group.add(slab, wing, c1, c2, canopy);
   }
 
   // school — hall + paved yard + flagpole (west quarter)
   {
-    const sx2 = 87, sz2 = 8.4;
+    const [sx2, sz2] = STP(106, -26);
     const g = bedAt(sx2, sz2);
     const hall = new THREE.Mesh(new THREE.BoxGeometry(4.6, 2.8, 3.2), matWhite());
+    hall.rotation.y = YAW;
     hall.position.set(sx2, g + 1.4, sz2);
     hall.castShadow = hall.receiveShadow = true;
     const yard = new THREE.Mesh(new THREE.PlaneGeometry(7.5, 4.4), paving);
     yard.rotation.x = -Math.PI / 2;
+    yard.rotation.z = YAW;
     yard.position.set(sx2, g + 0.14, sz2 + 3.4);
     yard.receiveShadow = true;
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 4.6, 6), matSteel());
@@ -1408,22 +1416,24 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
 
   // factory — sawtooth-roof shed + chimneys (south civic band)
   {
-    const fx = 104, fz = 37.2;
+    const [fx, fz] = STP(118, -38);
     const g = bedAt(fx, fz);
     const hall = new THREE.Mesh(new THREE.BoxGeometry(12, 4.2, 5.4), matConcreteDark());
+    hall.rotation.y = YAW;
     hall.position.set(fx, g + 2.1, fz);
     hall.castShadow = hall.receiveShadow = true;
     group.add(hall);
     for (let k = 0; k < 4; k++) {
       const tooth = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.12, 5.8), matGalvanised());
-      tooth.position.set(fx - 4.5 + k * 3.0, g + 4.85, fz);
-      tooth.rotation.z = 0.5;
+      tooth.rotation.y = YAW;
+      tooth.rotation.x = 0.5;
+      tooth.position.set(fx + (k - 1.5) * 3.0 * SC, g + 4.85, fz + (k - 1.5) * 3.0 * SC);
       tooth.castShadow = true;
       group.add(tooth);
     }
-    for (const cx of [fx - 4, fx + 4]) {
+    for (const cx of [-4, 4]) {
       const chim = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.62, 6.8, 9), matConcreteDark());
-      chim.position.set(cx, g + 5.4, fz + 1.2);
+      chim.position.set(fx + cx * SC, g + 5.4, fz + cx * SC);
       chim.castShadow = true;
       group.add(chim);
     }
@@ -1431,35 +1441,39 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
 
   // waterworks — pump hall + twin tanks on the river bank (riverside drive)
   {
-    const wx = 62, wz = -37;
+    const [wx, wz] = STP(88, -36);
     const g = bedAt(wx, wz);
     const hall = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.2, 3.0), matWhite());
+    hall.rotation.y = YAW;
     hall.position.set(wx, g + 1.1, wz);
     hall.castShadow = true;
     const tankMat = new THREE.MeshStandardMaterial({ color: 0x7fa3b8, roughness: 0.55, metalness: 0.3 });
-    for (const tx of [wx - 2.8, wx + 2.8]) {
+    for (const tx of [-2.8, 2.8]) {
       const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 2.2, 12), tankMat);
-      tank.position.set(tx, g + 1.1, wz + 0.4);
+      tank.position.set(wx + tx * SC, g + 1.1, wz + tx * SC);
       tank.castShadow = true;
       group.add(tank);
     }
     const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 5.8, 7), matDark());
     pipe.rotation.z = Math.PI / 2;
+    pipe.rotation.y = YAW;
     pipe.position.set(wx, g + 0.5, wz + 2.0);
     group.add(hall, pipe);
   }
 
   // fuel depot — horizontal tanks in a bund (east district)
   {
-    const fx = 137.2, fz = 18;
+    const [fx, fz] = STP(132, -12);
     const g = bedAt(fx, fz);
     const bund = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.5, 8.2), matConcrete());
+    bund.rotation.y = YAW;
     bund.position.set(fx, g + 0.1, fz);
     bund.receiveShadow = true;
     const tankMatF = new THREE.MeshStandardMaterial({ color: 0xb8b2a4, roughness: 0.6, metalness: 0.25 });
     for (let k = 0; k < 3; k++) {
       const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 3.6, 12), tankMatF);
       tank.rotation.x = Math.PI / 2;
+      tank.rotation.z = YAW;
       tank.position.set(fx, g + 0.9, fz - 2.6 + k * 2.6);
       tank.castShadow = true;
       group.add(tank);
@@ -1470,109 +1484,123 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     group.add(bund, pump);
   }
 
-  // substation — gravel pad, transformers, gantry (east district)
+  // POWER SUBSTATION — gravel pad, transformers, gantry + pylon cluster
+  // (reference POWER SUBSTATION, lower-left bench)
   {
-    const vx = 136.2, vz = -2.9;
+    const [vx, vz] = STP(140, -48);
     const g = bedAt(vx, vz);
-    const pad = new THREE.Mesh(new THREE.BoxGeometry(4.8, 0.14, 5.6), new THREE.MeshStandardMaterial({ color: 0x9a968c, roughness: 0.98 }));
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(9.5, 0.14, 7.5), new THREE.MeshStandardMaterial({ color: 0x9a968c, roughness: 0.98 }));
+    pad.rotation.y = YAW;
     pad.position.set(vx, g + 0.07, vz);
     pad.receiveShadow = true;
-    for (const [tx, tz] of [[vx - 1.1, vz - 1.2], [vx - 1.1, vz + 1.2]] as const) {
+    for (const [tx, tz] of [[-2.2, -1.8], [-2.2, 1.8], [0.6, 0]] as const) {
       const xfmr = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.3, 1.1), matDark());
-      xfmr.position.set(tx, g + 0.8, tz);
+      xfmr.rotation.y = YAW;
+      xfmr.position.set(vx + (tx * Math.cos(YAW) + tz * Math.sin(YAW)), g + 0.8, vz + (-tx * Math.sin(YAW) + tz * Math.cos(YAW)));
       xfmr.castShadow = true;
       group.add(xfmr);
     }
-    for (const gz2 of [vz - 2.2, vz + 2.2]) {
+    for (const gz2 of [-3.2, 3.2]) {
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 4.4, 6), matGalvanised());
-      post.position.set(vx + 1.6, g + 2.2, gz2);
+      post.position.set(vx + 2.6 * SC, g + 2.2, vz + 2.6 * SC + gz2 * 0.4);
       post.castShadow = true;
       group.add(post);
     }
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 4.6), matGalvanised());
-    beam.position.set(vx + 1.6, g + 4.2, vz);
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 6.4), matGalvanised());
+    beam.rotation.y = YAW;
+    beam.position.set(vx + 2.6 * SC, g + 4.2, vz + 2.6 * SC);
     group.add(pad, beam);
+    // two dead-end pylons framing the yard
+    for (const [ps, pt] of [[137.5, -50.5], [143, -45.5]] as const) {
+      const [px, pz] = STP(ps, pt);
+      const py = makePylon(9.5);
+      py.position.set(px, bedAt(px, pz), pz);
+      py.rotation.y = YAW;
+      group.add(py);
+    }
   }
 
   // civic hall — columned portico + pediment (south civic band)
   {
-    const cx = 127, cz = 26.4;
+    const [cx, cz] = STP(128, -34);
     const g = bedAt(cx, cz);
     const hall = new THREE.Mesh(new THREE.BoxGeometry(5.2, 3.4, 3.6), matWhite());
+    hall.rotation.y = YAW;
     hall.position.set(cx, g + 1.7, cz);
     hall.castShadow = hall.receiveShadow = true;
     const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 1.6, 1.1, 3), matWhite());
     ped.rotation.x = Math.PI / 2;
-    ped.rotation.y = Math.PI / 2;
+    ped.rotation.y = Math.PI / 2 + YAW;
     ped.position.set(cx, g + 4.0, cz - 1.95);
     ped.castShadow = true;
     group.add(hall, ped);
     for (let k = 0; k < 4; k++) {
       const column = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 2.6, 8), matWhite());
-      column.position.set(cx - 1.8 + k * 1.2, g + 1.3, cz - 2.05);
+      column.position.set(cx + (k - 1.5) * 1.2 * SC, g + 1.3, cz + (k - 1.5) * 1.2 * SC - 2.05);
       column.castShadow = true;
       group.add(column);
     }
   }
 
   // industrial estate — big gable-roof warehouses with loading bays, container
-  // stacks and a shared parking apron (reference INDUSTRIAL AREA, south-east
-  // of the city beside the farm belt)
+  // stacks and a shared parking apron (reference INDUSTRIAL AREA, NE bench)
   {
     const roofLight = new THREE.MeshStandardMaterial({ color: 0xd7dade, roughness: 0.65, metalness: 0.12 });
     const roofBlue = new THREE.MeshStandardMaterial({ color: 0x6d8fa8, roughness: 0.6, metalness: 0.15 });
     const wallLight = new THREE.MeshStandardMaterial({ color: 0xe3e1da, roughness: 0.85 });
     const doorMat = new THREE.MeshStandardMaterial({ color: 0x5d6266, roughness: 0.7, metalness: 0.3 });
     const contTints = [0xb4643c, 0x3f6e52, 0x4a6b8a, 0x9a4438, 0x8a8250];
-    const SHEDS: { x: number; z: number; w: number; d: number; blue: boolean; rot: number }[] = [
-      { x: 118, z: 37, w: 11, d: 5.6, blue: true, rot: 0.05 },
-      { x: 129, z: 38.5, w: 11, d: 5.6, blue: false, rot: -0.04 },
-      { x: 140, z: 33, w: 10, d: 5.2, blue: true, rot: 0.08 },
+    const SHEDS: { s: number; t: number; w: number; d: number; blue: boolean }[] = [
+      { s: 106, t: 14, w: 11, d: 5.6, blue: true },
+      { s: 114, t: 18, w: 11, d: 5.6, blue: false },
+      { s: 122, t: 12, w: 10, d: 5.2, blue: true },
     ];
-    for (const s of SHEDS) {
-      const g = bedAt(s.x, s.z);
+    for (const sd of SHEDS) {
+      const [sx, sz] = STP(sd.s, sd.t);
+      const g = bedAt(sx, sz);
       const shed = new THREE.Group();
-      const hall = new THREE.Mesh(new THREE.BoxGeometry(s.w, 3.6, s.d), wallLight);
+      const hall = new THREE.Mesh(new THREE.BoxGeometry(sd.w, 3.6, sd.d), wallLight);
       hall.position.y = 1.8;
       hall.castShadow = hall.receiveShadow = true;
       shed.add(hall);
       // gable roof pair
-      const rMat = s.blue ? roofBlue : roofLight;
-      const half = s.d / 2 + 0.35;
+      const rMat = sd.blue ? roofBlue : roofLight;
+      const half = sd.d / 2 + 0.35;
       for (const side of [-1, 1]) {
-        const slab = new THREE.Mesh(new THREE.BoxGeometry(s.w + 0.6, 0.14, Math.hypot(half, 1.7)), rMat);
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(sd.w + 0.6, 0.14, Math.hypot(half, 1.7)), rMat);
         slab.position.set(0, 4.35, side * half * 0.5);
         slab.rotation.x = side * -0.55;
         slab.castShadow = true;
         shed.add(slab);
       }
-      // loading bay doors on the north face
+      // loading bay doors on the river side
       for (let k = 0; k < 3; k++) {
         const door = new THREE.Mesh(new THREE.BoxGeometry(1.7, 2.1, 0.1), doorMat);
-        door.position.set(-s.w * 0.3 + k * s.w * 0.3, 1.05, -s.d / 2 - 0.04);
+        door.position.set(-sd.w * 0.3 + k * sd.w * 0.3, 1.05, -sd.d / 2 - 0.04);
         shed.add(door);
       }
-      shed.position.set(s.x, g, s.z);
-      shed.rotation.y = s.rot;
+      shed.position.set(sx, g, sz);
+      shed.rotation.y = YAW;
       group.add(shed);
-      // apron + containers on the north side
-      const apron = new THREE.Mesh(new THREE.PlaneGeometry(s.w + 3, 4.6), paving);
+      // apron + containers on the river side
+      const apron = new THREE.Mesh(new THREE.PlaneGeometry(sd.w + 3, 4.6), paving);
       apron.rotation.x = -Math.PI / 2;
-      apron.position.set(s.x, g + 0.1, s.z - s.d / 2 - 2.6);
+      apron.rotation.z = YAW;
+      apron.position.set(sx, g + 0.1, sz - sd.d / 2 - 2.6);
       apron.receiveShadow = true;
       group.add(apron);
-      const nC = 2 + Math.floor(hashRnd(s.x * 3.3) * 3);
+      const nC = 2 + Math.floor(hashRnd(sx * 3.3) * 3);
       for (let k = 0; k < nC; k++) {
-        const cx2 = s.x - s.w * 0.35 + k * 2.5 + hashRnd(s.x + k) * 0.8;
-        const cz2 = s.z - s.d / 2 - 2.2 - hashRnd(s.z * 2 + k) * 1.2;
-        const stack = 1 + Math.floor(hashRnd(s.x * 7 + k * 3) * 2.4);
+        const cx2 = sx - sd.w * 0.35 * SC + k * 2.5 * SC + hashRnd(sx + k) * 0.8;
+        const cz2 = sz + sd.w * 0.35 * SC - sd.d / 2 - 2.2 - hashRnd(sz * 2 + k) * 1.2;
+        const stack = 1 + Math.floor(hashRnd(sx * 7 + k * 3) * 2.4);
         for (let m = 0; m < stack; m++) {
           const cont = new THREE.Mesh(
             new THREE.BoxGeometry(2.2, 0.85, 1.0),
-            new THREE.MeshStandardMaterial({ color: contTints[Math.floor(hashRnd(s.z + k * 5 + m) * contTints.length)], roughness: 0.8, metalness: 0.1 }),
+            new THREE.MeshStandardMaterial({ color: contTints[Math.floor(hashRnd(sz + k * 5 + m) * contTints.length)], roughness: 0.8, metalness: 0.1 }),
           );
           cont.position.set(cx2, bedAt(cx2, cz2) + 0.45 + m * 0.88, cz2);
-          cont.rotation.y = (hashRnd(cx2 * 3 + m) - 0.5) * 0.2;
+          cont.rotation.y = YAW + (hashRnd(cx2 * 3 + m) - 0.5) * 0.2;
           cont.castShadow = true;
           group.add(cont);
         }
@@ -1585,9 +1613,9 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
 
 // ============================================================ FAR TERRAIN
 // The solver domain is a hard-edged plane; this dresses the world beyond it so
-// the square canvas never shows its cut: the downstream valley keeps running
-// east past the exit gorge (the flood river visibly continues toward the
-// horizon), and a rounded forested mountain ring closes the view on all four
+// the square canvas never shows its cut: the diagonal valley keeps running
+// past the bottom-right exit (the flood river visibly continues toward the
+// horizon) and a rounded forested mountain ring closes the view on all four
 // sides. Heights blend out of bedAt() so the seam against the solver mesh is
 // invisible, and colour comes from the same terrainColor painter.
 export function buildFarTerrain(): { group: THREE.Group } {
@@ -1601,24 +1629,26 @@ export function buildFarTerrain(): { group: THREE.Group } {
   // distant backdrop: forested mountain ring — tall enough to frame the
   // valley like the reference map (green wooded slopes, tan high tops)
   const ringH = (x: number, z: number): number =>
-    12 + 14 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
+    13 + 15 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
      + 3.5 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
 
   const farH = (x: number, z: number): number => {
-    // east corridor: bedAt stays well-behaved east of the canvas, so the
-    // valley (channel + widening walls) keeps running out toward the horizon
-    // and the range closes over it further downstream
-    const dzo = z - axisAt(LX);
-    if (x > LX && Math.abs(dzo) < 46) {
-      const valley = bedAt(x, z);
-      const t = Math.max(sstep(175, 255, x), sstep(34, 46, Math.abs(dzo)));
-      return valley + (ringH(x, z) + 2 - valley) * t;
+    const [s, t] = xz2st(x, z);
+    // past the bottom-right exit: the valley keeps running out along the
+    // diagonal and the range closes over it further downstream
+    if (s > 226.3 && Math.abs(t) < 70) {
+      const wv = Math.max(8, 14 - (s - 226.3) * 0.06);
+      const dtn = Math.abs(t) - wv;
+      const valley = Math.max(2.5, 4.5 - (s - 226.3) * 0.02)
+        + (dtn > 0 ? (1 - Math.exp(-dtn / 16)) * 18 : 0);
+      const tt = Math.max(sstep(140, 260, s), sstep(34, 66, Math.abs(t)));
+      return valley + (ringH(x, z) + 2 - valley) * tt;
     }
     // everywhere else: hold the boundary profile, fade into the range
     const dOut = Math.max(-x, x - LX, -LZ / 2 - z, z - LZ / 2, 0);
     const base = bedAt(clamp(x, 1.5, LX - 1.5), clamp(z, -LZ / 2 + 1, LZ / 2 - 1));
-    const t = sstep(2, 70, dOut);
-    return base + (ringH(x, z) - base) * t;
+    const tt = sstep(2, 70, dOut);
+    return base + (ringH(x, z) - base) * tt;
   };
 
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0, envMapIntensity: 0.18 });
@@ -1658,7 +1688,7 @@ export function buildFarTerrain(): { group: THREE.Group } {
   };
 
   // four aprons framing the canvas: north / south rims, west headwall, east
-  // valley continuation (the east strip carries the river out of frame)
+  // valley continuation (the far corner strip carries the river out of frame)
   strip(-200, 340, -210, -LZ / 2, 128, 30);
   strip(-200, 340, LZ / 2, 210, 128, 30);
   strip(-200, 0, -LZ / 2, LZ / 2, 46, 64);
@@ -1675,6 +1705,8 @@ export function buildFarTerrain(): { group: THREE.Group } {
 
   return { group };
 }
+
+
 
 
 

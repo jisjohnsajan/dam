@@ -1,9 +1,15 @@
 // Terrain generation & physical layout for the dam-break simulation.
-// SQUARE CANVAS world (160 × 160 m): the dam + reservoir occupy the TOP-LEFT
-// corner, the river runs east along the upper canvas and the floodplain fans
-// south-east across the rest of the square, where the city, villages and
-// farmland stand. x ∈ [0, LX] west → east, z ∈ [-LZ/2, LZ/2] north → south
+// DIAGONAL CORNER MAP (reference satellite diorama): the dam + reservoir
+// occupy the TOP-LEFT corner with the dam wall running DIAGONALLY (45°) across
+// the corner; the river/flood flows down-right toward the BOTTOM-RIGHT corner
+// through a broad floodplain flanked by big green ranges (top-right and
+// bottom-left). x ∈ [0, LX] west → east, z ∈ [-LZ/2, LZ/2] north → south
 // (screen top = -z). Sim texture uv: u = x / LX, v = (z + LZ/2) / LZ.
+//
+// All valley geometry is authored in a rotated frame:
+//   s = downstream distance from the top-left corner (along the +x,+z diagonal)
+//   t = cross-valley offset (+t toward the top-right corner)
+// with a 1:1 metre scale (pure rotation, no scaling).
 
 export const LX = 160;
 export const LZ = 160;
@@ -12,14 +18,40 @@ export const NZ = 320;
 export const DX = LX / NX;
 export const DZ = LZ / NZ;
 
-// River / reservoir axis: the upper (northern) band of the square canvas.
-export const AXIS_Z = -45;
+// ---------------------------------------------------------------- rotated frame
+export const SC = Math.SQRT1_2; // cos/sin of the 45° diagonal
 
-export const DAM_X = 40; // upstream face of the dam (near the left edge)
+/** rotated (s,t) → world (x,z). s: downstream from the top-left corner,
+ *  t: cross-valley (+ toward the top-right corner). */
+export function st2xz(s: number, t: number): [number, number] {
+  return [(s + t) * SC, (s - t) * SC - LZ / 2];
+}
+
+/** world (x,z) → rotated (s,t). */
+export function xz2st(x: number, z: number): [number, number] {
+  const z2 = z + LZ / 2;
+  return [(x + z2) * SC, (x - z2) * SC];
+}
+
+// ------------------------------------------------------------------ dam layout
+// The concrete dam cuts the top-left corner: its upstream face lies on the
+// diagonal line s = DAM_S, spanning t ∈ [T_DAM0, T_DAM1] — the south-west end
+// lands exactly ON the west domain edge (the dam reads as running off-frame,
+// like the reference) and the north-east end keys into the abutment massif.
+export const DAM_S = 61; // upstream face (s)
+export const DAM_TOE_S = DAM_S + 8.6; // downstream toe (s)
+export const T_DAM0 = -61; // dam span start (t) — at the west edge
+export const T_DAM1 = -5; // dam span end (t) — into the NE abutment
+
+// Legacy world-x of the dam zone (used by engine stats/drive clamp; the lake
+// sits mostly west of this line so the reservoir drive region stays correct).
+export const DAM_X = 40;
 export const CREST = 23; // main crest elevation (m)
 export const RES_LEVEL = 21.5; // default reservoir surface elevation
-export const SPILL_Z0 = AXIS_Z + 18; // spillway notch band (z)
-export const SPILL_Z1 = AXIS_Z + 30;
+
+// Spillway notch band (t) — two radial gates between three piers.
+export const SPILL_Z0 = -52;
+export const SPILL_Z1 = -40;
 export const SPILL_CREST_CLOSED = 22.8; // gate-top sill when gates closed
 // (kept above the live-operable level range — slider max 22.7 — so a full
 // reservoir never leaks through visually-closed gates; only "Open gates"
@@ -28,26 +60,63 @@ export const GATE_OPEN_ELEV = 15.5; // sill when gates fully open
 
 // The central dam section is split into 5 monolith blocks so a breach opens
 // exactly where blocks fail — water can only flow through the visible gap.
-export const BLOCK_Z0 = AXIS_Z - 14;
-export const BLOCK_Z1 = AXIS_Z + 10;
+export const BLOCK_Z0 = -34; // breach zone start (t)
+export const BLOCK_Z1 = -10; // breach zone end (t)
 export const BLOCK_N = 5;
 export const BLOCK_W = (BLOCK_Z1 - BLOCK_Z0) / BLOCK_N; // 4.8 m
 export const BREACH_BOTTOM = 11.4; // final breach invert (rubble top)
 
-// River inlet gorge at the WEST edge — the reservoir is fed by a VISIBLE
-// river channel carved through the mountain wall (no water appears from
-// nowhere). The gorge band is centred on AXIS_Z.
-export const GORGE_HALF_W = 3.6; // inflow band |z - AXIS_Z| < GORGE_HALF_W
+// Reservoir inflow source band (engine shader injects here — west edge at
+// z ≈ 0, which the corner lake covers with deep water).
+export const GORGE_HALF_W = 3.6; // inflow band |z| < GORGE_HALF_W
 export const SRC_X0 = 1.6;
 export const SRC_X1 = 6.0;
 
-// Stilling-basin apron: concrete slab on the channel bed at the dam toe.
-// props.ts draws the visual slab at the SAME elevation so the flood visibly
-// rides over it instead of vanishing under a floating slab.
-export const APRON_X0 = DAM_X + 8.6;
-export const APRON_X1 = DAM_X + 22.6;
-export const APRON_HALF_W = 30;
-export const APRON_TOP = bedAt(DAM_X + 13.5, AXIS_Z) + 0.35; // slab top elevation (m)
+// Stilling-basin apron: concrete slab on the channel bed at the dam toe
+// (diagonal band downstream of the dam, centred on the gorge axis t = APRON_T).
+export const APRON_S0 = DAM_TOE_S;
+export const APRON_S1 = DAM_TOE_S + 14;
+export const APRON_T = -29;
+export const APRON_HALF_W = 18;
+export const APRON_TOP = bedAt(DAM_TOE_S + 13.5, APRON_T) + 0.35; // slab top (m)
+
+// Legacy axis helper (kept for compatibility): world z of the valley centre
+// where the channel crosses the given world x.
+export function axisAt(x: number): number {
+  for (let s = DAM_TOE_S; s <= 226; s += 2) {
+    const [x0] = st2xz(s, axisT(s));
+    const [x1] = st2xz(s + 2, axisT(s + 2));
+    if (x >= x0 && x <= x1) {
+      const f = (x - x0) / Math.max(x1 - x0, 1e-6);
+      return st2xz(s + 2 * f, axisT(s))[1];
+    }
+  }
+  return st2xz(150, axisT(150))[1];
+}
+
+// Channel centreline (t) meandering down the diagonal valley: leaves the
+// apron at t ≈ -29, sweeps toward the valley centre, then exits at the
+// bottom-right corner (s = 226, t = 0).
+function sstep(a: number, b: number, x: number): number {
+  const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
+  return t * t * (3 - 2 * t);
+}
+export function axisT(s: number): number {
+  return -29 + 24 * sstep(70, 130, s) - 4 * sstep(140, 190, s) + 9 * sstep(190, 226, s);
+}
+// Valley centre (broader than the channel — the floodplain axis).
+function valleyMid(s: number): number {
+  return -29 + 24 * sstep(70, 135, s);
+}
+// Valley half-widths (asymmetric: the north-east bench — where the village,
+// industry and agricultural land stand — is broader than the south-west one),
+// confined gorge at the toe, opening floodplain, narrowing exit corner.
+function valleyWN(s: number): number {
+  return Math.min(38 + 0.40 * (s - 70), 58, 10 + 1.5 * (226 - s));
+}
+function valleyWS(s: number): number {
+  return Math.min(14 + 0.55 * (s - 70), 52, 7 + 1.5 * (226 - s));
+}
 
 // ---------------------------------------------------------------- value noise
 function hash2(x: number, y: number): number {
@@ -74,119 +143,101 @@ export function fbm(x: number, y: number, oct = 4): number {
   }
   return s;
 }
-function smoothstep(a: number, b: number, x: number): number {
-  const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
-  return t * t * (3 - 2 * t);
-}
-
-// River axis drifts gently south-east downstream so the flood wave fans
-// across the canvas (top-left dam → centre/east floodplain).
-export function axisAt(x: number): number {
-  return AXIS_Z + 17 * smoothstep(54, 152, x);
-}
 
 // ------------------------------------------------------------------- bed zone
-// Longitudinal profile + valley walls + incised downstream channel + gorge
-// inlet + the square-canvas perimeter range (smooth rounded mountains on all
-// four edges — tallest around the reservoir corner, lowest at the south rim).
+// Longitudinal profile + reservoir pocket + diagonal gorge + floodplain walls
+// + flank ranges + canvas rims + bottom-right exit gorge.
 export function bedAt(x: number, z: number): number {
-  const az = axisAt(x);
-  const dzo = z - az; // cross-valley offset from the local river axis
+  const [s, t] = xz2st(x, z);
+  const rough = 0.85 + 0.3 * fbm(s * 0.08 + 3.7, t * 0.08, 3);
 
   let floor: number;
-  if (x < DAM_X) {
-    floor = 13.0 - (x / DAM_X) * 1.2; // reservoir reach: 13 → 11.8
+  if (s < DAM_S) {
+    floor = 12.8 - (s / DAM_S) * 1.0; // reservoir reach: 12.8 → 11.8
+  } else if (s < DAM_TOE_S) {
+    floor = 11.8; // under the dam
   } else {
-    const t = Math.min((x - DAM_X) / 95, 1);
-    floor = 11.8 - t * 7.3; // downstream valley: 11.8 → 4.5
+    const d = Math.min((s - DAM_TOE_S) / 95, 1);
+    floor = 11.8 - d * 7.3; // downstream valley: 11.8 → 4.5
   }
 
-  // incised main channel downstream of the dam (gaussian cut, ~2.2 m deep)
-  if (x > DAM_X + 4) {
+  // incised main channel downstream of the toe (gaussian cut, ~2.2 m deep)
+  if (s > DAM_TOE_S + 2) {
+    const dzo = t - axisT(s);
     floor -= 2.2 * Math.exp(-(dzo * dzo) / 100);
   }
 
-  const rough = 0.85 + 0.3 * fbm(x * 0.08 + 3.7, z * 0.08, 3);
-
-  // ---- reservoir basin (top-left corner lake) ----------------------------
-  // asymmetric half-widths: the north shore hugs the rim, the south shore
-  // leaves a strip of land (SW quadrant) between the lake and the canvas
-  if (x < DAM_X) {
-    const bulge = Math.exp(-((x - 19) * (x - 19)) / 430);
-    const wN = 26 + 3.5 * bulge; // north shore distance from the axis
-    const wS = 31 + 7.5 * bulge; // south shore distance from the axis
-    const tN = -dzo - wN; // > 0 north of the north shore
-    const tS = dzo - wS; // > 0 south of the south shore
-    if (tN > 0) floor += (1 - Math.exp(-tN / 15)) * 20 * rough;
-    if (tS > 0) floor += (1 - Math.exp(-tS / 17)) * 17 * rough;
+  // ---- reservoir pocket (top-left corner lake) ----------------------------
+  if (s < DAM_S) {
+    // north-east shore: a wall line running from the top edge (lake runs off
+    // the top frame near the corner) down to the dam's NE end
+    const shoreN = Math.min(s + 1.5, -5 + 0.34 * (DAM_S - s));
+    const dtn = t - shoreN;
+    if (dtn > 0) floor += (1 - Math.exp(-dtn / 9)) * 22 * rough;
+    // south-west side: no wall inside the domain — the lake hugs the west
+    // edge (sealed by the boundary plug) and runs off-frame, like the
+    // reference. Rock spur under the inflow band keeps the bed deep there.
   }
 
-  // ---- downstream corridor walls ------------------------------------------
-  // the valley is confined near the dam, then the SOUTH wall recedes so the
-  // floodplain opens across the centre/south of the canvas (city floor)
-  if (x >= DAM_X) {
-    const open = smoothstep(56, 118, x);
-    const wN2 = 27;
-    const wS2 = 26 + 36 * open;
-    const tN2 = -dzo - wN2;
-    const tS2 = dzo - wS2;
-    if (tN2 > 0) floor += (1 - Math.exp(-tN2 / 16)) * 19 * rough;
-    if (tS2 > 0) floor += (1 - Math.exp(-tS2 / 19)) * 16 * rough;
+  // ---- NE abutment massif (downstream of the dam's NE end) ----------------
+  // rises steeply within ~3 m of the dam end so the reservoir is sealed,
+  // then fades out into the valley's north-east wall
+  if (s > DAM_S - 0.5 && t > T_DAM1) {
+    const steep = 1 - sstep(DAM_S + 14, DAM_S + 30, s);
+    const amp = 26 * steep;
+    const width = 3 * steep + 11 * (1 - steep);
+    floor += (1 - Math.exp(-(t - T_DAM1) / width)) * amp * rough;
   }
 
-  // Abutment shoulders — near the dam the valley walls rise just above the
-  // crest so the structure visibly keys into solid rock at both flanks.
-  const damDist = Math.abs(x - DAM_X);
-  const wz = Math.abs(dzo);
-  if (damDist < 30 && wz > 24) {
-    const near = smoothstep(30, 8, damDist); // 1 at the dam axis, fades by ±30 m
-    const t = (wz - 24) / 13;
-    floor += near * Math.min(t, 0.9) * 9.0;
+  // ---- SW abutment wedge (downstream of the dam's SW end, at the edge) ----
+  if (s > DAM_S && t < T_DAM0) {
+    floor += (1 - Math.exp(-(T_DAM0 - t) / 3)) * 24 * rough;
   }
 
-  // ---- square-canvas perimeter range (smooth rounded walls, no peaks) -----
-  // west headwall behind the reservoir (gorge carved through it)
-  if (x < 10) {
-    const carve = smoothstep(GORGE_HALF_W, 9.5, Math.abs(z - AXIS_Z));
-    const corner = 1 + 0.55 * smoothstep(-30, -72, z); // NW massif boost
-    if (x < 8) floor += (7 - x) * (7 - x) * 0.5 * (0.1 + 0.9 * carve) * corner;
-    if (Math.abs(z - AXIS_Z) < GORGE_HALF_W + 1.2) {
-      // gorge floor feeds the reservoir; a rapids channel ramps gently down
-      // toward the lake (the visible inflow river)
-      floor = Math.min(floor, 13.4 - x * 0.09 + smoothstep(3.6, 0.6, x) * 10.0);
-      // end sill: the notch floor rises back ABOVE every achievable water
-      // level (scenario drive caps at 24.4 m) right at the domain edge, so
-      // the reservoir shoreline always tucks onto this rock ramp INSIDE the
-      // notch instead of being sliced off by the boundary plane.
-      const band = 1 - smoothstep(GORGE_HALF_W + 1.2, GORGE_HALF_W + 2.8, Math.abs(z - AXIS_Z));
-      floor += smoothstep(2.6, 0.4, x) * 13.2 * band;
+  // ---- downstream valley walls + flank ranges -----------------------------
+  if (s >= DAM_TOE_S - 4) {
+    const mid = valleyMid(s);
+    const wv = t > mid ? valleyWN(s) : valleyWS(s);
+    const dt = Math.abs(t - mid) - wv;
+    if (dt > 0) {
+      // big green ranges flanking the floodplain (top-right & bottom-left),
+      // fading near the dam gorge and the exit corner
+      const rangeEnv =
+        sstep(78, 100, s) * (1 - sstep(190, 224, s)) * 26 +
+        4 * sstep(150, 200, s);
+      const wall = (1 - Math.exp(-dt / 16)) * (20 + rangeEnv) * rough;
+      floor += wall;
+      // extra shoulder so the ranges read as rounded massifs, not ridges
+      floor += sstep(24, 66, dt) * rangeEnv * 0.55 * rough;
     }
   }
-  // north rim (canvas top edge)
-  {
-    const tN3 = -(z + 77);
-    if (tN3 > 0) {
-      const boost = 1 + 0.35 * smoothstep(70, 20, x); // taller around the lake
-      floor += (1 - Math.exp(-tN3 / 15)) * 22 * rough * boost;
-    }
+
+  // ---- square-canvas rims (modest frame; big relief comes from the flanks)
+  // north rim — fades out over the lake so the reservoir runs off the top
+  if (z < -77) {
+    const fade = sstep(14, 34, x);
+    floor += (1 - Math.exp(-(-77 - z) / 15)) * 13 * rough * fade;
   }
-  // south rim (canvas bottom edge) — lowest, so the aerial camera sees over it
-  {
-    const tS3 = z - 72;
-    if (tS3 > 0) floor += (1 - Math.exp(-tS3 / 19)) * 17 * rough;
+  // south rim — lowest, so the aerial camera sees over it
+  if (z > 72) {
+    floor += (1 - Math.exp(-(z - 72) / 19)) * 14 * rough;
   }
-  // east rim (canvas right edge) with the river exit gorge carved through
-  {
-    const tE = x - 154;
-    if (tE > 0) {
-      const carve = smoothstep(5.5, 14, Math.abs(z - axisAt(LX))); // 0 at the exit
-      floor += (1 - Math.exp(-tE / 14)) * 21 * rough * (0.12 + 0.88 * carve);
-    }
+  // west rim — only south of the lake (the lake runs off the left frame)
+  if (x < 3 && z > 10) {
+    floor += (1 - Math.exp(-(3 - x) / 9)) * 13 * rough * sstep(10, 26, z);
+  }
+  // east rim with the river exit gorge carved through at t ≈ 0
+  if (x > 153) {
+    const carve = sstep(5.5, 14, Math.abs(t - axisT(226)));
+    floor += (1 - Math.exp(-(x - 153) / 14)) * 20 * rough * (0.12 + 0.88 * carve);
   }
 
   // rockiness — kept subtle on the walls so the slopes read as smooth turf
   // and weathered rock, not craggy rubble
-  const amp = wz > 26 ? 2.6 : 0.55;
+  const dtWall = s >= DAM_TOE_S - 4
+    ? Math.abs(t - valleyMid(s)) - (t > valleyMid(s) ? valleyWN(s) : valleyWS(s))
+    : 0;
+  const amp = dtWall > 26 ? 2.6 : 0.55;
   floor += (fbm(x * 0.11 + 7.3, z * 0.11 + 2.1, 4) - 0.5) * amp;
 
   return Math.max(floor, 2.5);
@@ -200,15 +251,17 @@ export function buildStructBase(): Float32Array {
     for (let i = 0; i < NX; i++) {
       const x = (i + 0.5) * DX;
       const z = (j + 0.5) * DZ - LZ / 2;
-      if (x > DAM_X - 0.3 && x < DAM_X + 8.6) {
+      const [s, t] = xz2st(x, z);
+      if (s > DAM_S - 0.3 && s < DAM_TOE_S && t > T_DAM0 - 0.2 && t < T_DAM1 + 0.2) {
         const b = bedAt(x, z);
         if (b < 22.6) {
-          const crest = z > SPILL_Z0 && z < SPILL_Z1 ? SPILL_CREST_CLOSED : CREST;
+          const crest = t > SPILL_Z0 && t < SPILL_Z1 ? SPILL_CREST_CLOSED : CREST;
+          const u = s - DAM_S;
           let e: number;
-          if (x <= DAM_X + 3.2) {
+          if (u <= 3.2) {
             e = crest; // holding section with vertical upstream face
           } else {
-            e = Math.max(crest - (x - (DAM_X + 3.2)) * 2.2, b); // downstream batter
+            e = Math.max(crest - (u - 3.2) * 2.2, b); // downstream batter
           }
           arr[j * NX + i] = e;
         }
@@ -216,19 +269,16 @@ export function buildStructBase(): Float32Array {
 
       // stilling-basin apron slab — the flood rides over this shelf and the
       // baffle blocks churn it into whitewater (matches the visual slab)
-      if (x >= APRON_X0 && x <= APRON_X1 && Math.abs(z - AXIS_Z) <= APRON_HALF_W) {
+      if (s >= APRON_S0 && s <= APRON_S1 && Math.abs(t - APRON_T) <= APRON_HALF_W) {
         if (APRON_TOP > bedAt(x, z)) {
           arr[j * NX + i] = Math.max(arr[j * NX + i], APRON_TOP);
         }
       }
 
-      // Watertight west boundary plug. The gorge notch is open at the domain
-      // edge (analytic bed ~15 m there, far below every water level), so the
-      // lake surface would be sliced at x = 0 — at storm / overtop levels
-      // (24 m) that slice reads as a huge waterfall pouring off the edge of
-      // the world. A tall invisible wall just inside the boundary, hidden
-      // deep inside the mountain notch, seals EVERY achievable water level
-      // (max scenario drive 24.4 m) inside the domain.
+      // Watertight west boundary plug. The corner lake runs off the west
+      // domain edge (like the reference frame crop), so a tall invisible wall
+      // just inside the boundary seals EVERY achievable water level (max
+      // scenario drive 24.4 m) inside the domain.
       if (x < 0.6) {
         arr[j * NX + i] = Math.max(arr[j * NX + i], 30.0);
       }
@@ -257,40 +307,42 @@ export function applyStructState(
 ): void {
   target.set(base);
   if (breach && breach.count > 0 && breach.depth01 > 0) {
-    const zA = BLOCK_Z0 + breach.start * BLOCK_W;
-    const zB = zA + breach.count * BLOCK_W;
+    const tA = BLOCK_Z0 + breach.start * BLOCK_W;
+    const tB = tA + breach.count * BLOCK_W;
     // Clear the FULL dam thickness (holding section AND the downstream batter
     // down to the toe). The visual monolith blocks sink rigidly, so the
     // simulated structure must drop across their whole footprint — otherwise
     // an invisible wedge of "intact batter" keeps blocking the flow behind
     // the visibly-open gap and the breach jet never pours through.
-    const i0 = Math.max(0, Math.floor((DAM_X - 0.3) / DX));
-    const i1 = Math.min(NX - 1, Math.ceil((DAM_X + 8.9) / DX));
-    const j0 = Math.max(0, Math.floor((zA + LZ / 2) / DZ));
-    const j1 = Math.min(NZ - 1, Math.ceil((zB + LZ / 2) / DZ));
-    for (let j = j0; j <= j1; j++) {
+    const s0 = DAM_S - 0.3;
+    const s1 = DAM_TOE_S + 0.3;
+    for (let j = 0; j < NZ; j++) {
       const z = (j + 0.5) * DZ - LZ / 2;
-      if (z < zA || z > zB) continue;
-      const kb = Math.min(breach.count - 1, Math.max(0, Math.floor((z - zA) / BLOCK_W)));
-      const d01 = breach.depths ? breach.depths[kb] : breach.depth01;
-      if (d01 <= 0) continue;
-      for (let i = i0; i <= i1; i++) {
-        if (base[j * NX + i] > -500) {
-          const b = bedAt((i + 0.5) * DX, z);
-          const invert = Math.min(Math.max(b + 0.4, BREACH_BOTTOM - 1.2), BREACH_BOTTOM + 1.4);
-          target[j * NX + i] = CREST + (invert - CREST) * d01;
-        }
+      for (let i = 0; i < NX; i++) {
+        if (base[j * NX + i] <= -500) continue;
+        const x = (i + 0.5) * DX;
+        const [s, t] = xz2st(x, z);
+        if (s < s0 || s > s1 || t < tA || t > tB) continue;
+        const kb = Math.min(breach.count - 1, Math.max(0, Math.floor((t - tA) / BLOCK_W)));
+        const d01 = breach.depths ? breach.depths[kb] : breach.depth01;
+        if (d01 <= 0) continue;
+        const b = bedAt(x, z);
+        const invert = Math.min(Math.max(b + 0.4, BREACH_BOTTOM - 1.2), BREACH_BOTTOM + 1.4);
+        target[j * NX + i] = CREST + (invert - CREST) * d01;
       }
     }
   }
   if (gateElev != null) {
-    const i0 = Math.max(0, Math.floor((DAM_X - 0.3) / DX));
-    const i1 = Math.min(NX - 1, Math.ceil((DAM_X + 3.7) / DX));
-    const j0 = Math.max(0, Math.floor((SPILL_Z0 + LZ / 2) / DZ));
-    const j1 = Math.min(NZ - 1, Math.ceil((SPILL_Z1 + LZ / 2) / DZ));
-    for (let j = j0; j <= j1; j++)
-      for (let i = i0; i <= i1; i++)
-        if (base[j * NX + i] > -500) target[j * NX + i] = gateElev;
+    for (let j = 0; j < NZ; j++) {
+      const z = (j + 0.5) * DZ - LZ / 2;
+      for (let i = 0; i < NX; i++) {
+        if (base[j * NX + i] <= -500) continue;
+        const x = (i + 0.5) * DX;
+        const [s, t] = xz2st(x, z);
+        if (s < DAM_S - 0.3 || s > DAM_S + 3.7 || t < SPILL_Z0 || t > SPILL_Z1) continue;
+        target[j * NX + i] = gateElev;
+      }
+    }
   }
 }
 
@@ -302,27 +354,30 @@ export function buildInitState(resLevel = RES_LEVEL): Float32Array {
     for (let i = 0; i < NX; i++) {
       const x = (i + 0.5) * DX;
       const z = (j + 0.5) * DZ - LZ / 2;
+      const [s, t] = xz2st(x, z);
       const b = bedAt(x, z);
       let eta = b - 0.5; // dry
       let u = 0;
-      if (x < DAM_X - 0.3) {
-        if (b < resLevel) eta = resLevel; // reservoir
+      let v = 0;
+      if (s < DAM_S - 0.3) {
+        if (b < resLevel) eta = resLevel; // reservoir (corner lake)
       } else if (b < 10.2) {
         // base river confined to the incised channel (where the channel cut is
         // significant) — a full-valley sheet reads as a flooded floodplain and
         // ends in a hard straight edge at the domain boundary
-        const dzo = z - axisAt(x);
-        const inChannel = Math.exp(-(dzo * dzo) / 100) > 0.45; // |dz| <~ 10.7 m
+        const dzo = t - axisT(s);
+        const inChannel = Math.exp(-(dzo * dzo) / 100) > 0.45; // |dt| <~ 10.7 m
         if (inChannel) {
-          const taper = 1 - smoothstep(144, 159, x); // sink the river before the edge
+          const taper = 1 - sstep(206, 222, s); // sink the river before the exit
           eta = b + 0.4 * taper;
-          u = 0.7;
+          u = 0.5; // initial drift along the +x,+z diagonal (down-valley)
+          v = 0.5;
         }
       }
       const k = (j * NX + i) * 4;
       arr[k] = eta;
       arr[k + 1] = u;
-      arr[k + 2] = 0;
+      arr[k + 2] = v;
       arr[k + 3] = 0;
     }
   }
@@ -334,11 +389,11 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-// soft rounded-rect zone test with falloff (km-style city/farm masks)
-function zoneFall(x: number, z: number, x0: number, z0: number, x1: number, z1: number, f: number): number {
-  const dx = Math.min(x - x0, x1 - x);
-  const dz = Math.min(z - z0, z1 - z);
-  return smoothstep(-f, 0, Math.min(dx, dz));
+// soft rounded-rect zone test with falloff, in rotated (s,t) space
+function zoneFallST(s: number, t: number, s0: number, t0: number, s1: number, t1: number, f: number): number {
+  const ds = Math.min(s - s0, s1 - s);
+  const dtn = Math.min(t - t0, t1 - t);
+  return sstep(-f, 0, Math.min(ds, dtn));
 }
 
 // slope: |∇bed| estimated by caller
@@ -349,6 +404,7 @@ export function terrainColor(
   slope: number,
   out: { r: number; g: number; b: number },
 ): void {
+  const [s, t] = xz2st(x, z);
   const n = fbm(x * 0.35 + 11.1, z * 0.35 + 4.2, 3);
   const n2 = fbm(x * 0.06 + 1.7, z * 0.06 + 9.4, 2);
   const strata = Math.sin(b * 0.85 + n2 * 3.1) * 0.5 + 0.5; // rock banding
@@ -361,65 +417,66 @@ export function terrainColor(
 
   // lush grass on gentle terrain (tropical valley floor + benches) — vivid
   // yellow-green meadow like a sunlit satellite valley, brighter on the flats
-  const grass = smoothstep(0.55, 0.12, slope) * smoothstep(42, 14, b) * (0.5 + 0.5 * n2);
+  const grass = sstep(0.55, 0.12, slope) * sstep(42, 14, b) * (0.5 + 0.5 * n2);
   r = r * (1 - grass) + (0.26 + 0.07 * n2) * grass;
   g = g * (1 - grass) + (0.44 + 0.09 * n2) * grass;
   bl = bl * (1 - grass) + (0.17 + 0.04 * n2) * grass;
 
-  // scrub vegetation clothing the slopes — every hill/rim in the square canvas
-  // reads as green and rounded; bare rock only shows on steep faces
-  const scrub = smoothstep(1.5, 0.35, slope) * smoothstep(135, 20, b) * (0.3 + 0.7 * n);
+  // scrub vegetation clothing the slopes — every hill/range in the canvas
+  // reads as green and rounded; bare rock only shows on the steepest faces
+  const scrub = sstep(2.6, 0.5, slope) * sstep(135, 20, b) * (0.3 + 0.7 * n);
   const sv = scrub * 0.95;
   r = r * (1 - sv) + (0.20 + 0.05 * n2) * sv;
   g = g * (1 - sv) + (0.33 + 0.06 * n2) * sv;
   bl = bl * (1 - sv) + (0.145 + 0.035 * n2) * sv;
 
-  // forest floor — darker, richer green on the rim slopes and around the
+  // forest floor — darker, richer green on the flank ranges and around the
   // reservoir so the canvas edges read as wooded hills framing the valley
   const rimD = Math.min(x, LX - x, z + LZ / 2, LZ / 2 - z);
-  const forest = Math.max(smoothstep(1.35, 0.3, slope), smoothstep(34, 18, rimD) * 0.9)
-    * smoothstep(100, 18, b) * (0.6 + 0.4 * n);
+  const forest = Math.max(sstep(2.1, 0.4, slope), sstep(34, 18, rimD) * 0.9)
+    * sstep(100, 18, b) * (0.6 + 0.4 * n);
   r = r * (1 - forest) + (0.11 + 0.035 * n2) * forest;
   g = g * (1 - forest) + (0.24 + 0.055 * n2) * forest;
   bl = bl * (1 - forest) + (0.115 + 0.03 * n2) * forest;
 
-  // urban ground — the city plain (centre/east of the canvas) gets a warm
-  // pavement/park blend so streets and districts sit on visibly developed land
-  const urbanZone = zoneFall(x, z, 58, -28, 150, 42, 9);
-  const urban = urbanZone * smoothstep(13.5, 9.5, b) * smoothstep(0.5, 0.12, slope) * (0.55 + 0.45 * n2);
+  // urban ground — the town plain (centre-left bank of the diagonal valley)
+  const urbanZone = zoneFallST(s, t, 92, -48, 154, -2, 9);
+  const urban = urbanZone * sstep(13.5, 8.5, b) * sstep(0.5, 0.12, slope) * (0.55 + 0.45 * n2);
   r = r * (1 - urban) + (0.315 + 0.035 * n) * urban;
   g = g * (1 - urban) + (0.30 + 0.03 * n) * urban;
   bl = bl * (1 - urban) + (0.262 + 0.028 * n) * urban;
 
-  // farmland belts — south of the city + the SW quadrant, subtle warm strips
+  // farmland belts — upper-right agricultural bench (reference AGRICULTURAL
+  // LAND), the south-west bench, and fields east of the lower floodplain
   const farmZone =
-    zoneFall(x, z, 48, 44, 152, 68, 7) * 0.8 + zoneFall(x, z, 6, -4, 44, 40, 8) * 0.7 +
-    zoneFall(x, z, 90, -57, 150, -46, 7) * 0.75;
-  const farm = Math.min(farmZone, 1) * smoothstep(16, 9, b) * smoothstep(0.7, 0.2, slope) * (0.4 + 0.6 * n2);
+    zoneFallST(s, t, 84, 4, 132, 36, 8) * 0.85 +
+    zoneFallST(s, t, 102, -50, 140, -38, 7) * 0.8 +
+    zoneFallST(s, t, 140, -44, 176, -8, 7) * 0.7;
+  const farm = Math.min(farmZone, 1) * sstep(16, 8, b) * sstep(0.7, 0.2, slope) * (0.4 + 0.6 * n2);
   r = r * (1 - farm) + (0.36 + 0.04 * n) * farm;
   g = g * (1 - farm) + (0.33 + 0.03 * n) * farm;
   bl = bl * (1 - farm) + (0.20 + 0.02 * n) * farm;
 
   // sandy channel bed — restricted to the incised channel band (gaussian cut
-  // |dz| ≲ 11) so the floodplain reads as vegetated plain, not desert
-  const dzo = z - axisAt(x);
-  const sand = smoothstep(0.6, 1.8, 1.8 - slope) * smoothstep(10.8, 9.2, b)
-    * (x > DAM_X - 4 ? 1 : 0) * smoothstep(16, 9, Math.abs(dzo));
+  // |dt| ≲ 11) so the floodplain reads as vegetated plain, not desert
+  const dzo = t - axisT(s);
+  const sand = sstep(0.6, 1.8, 1.8 - slope) * sstep(10.8, 9.2, b)
+    * (s > DAM_S - 4 ? 1 : 0) * sstep(16, 9, Math.abs(dzo));
   r = r * (1 - sand) + 0.52 * sand;
   g = g * (1 - sand) + 0.46 * sand;
   bl = bl * (1 - sand) + 0.33 * sand;
 
   // dark wet sediment under the reservoir + drawdown stain ring
-  if (x < DAM_X && b < RES_LEVEL + 0.7) {
-    const s = smoothstep(RES_LEVEL + 0.7, RES_LEVEL - 2.5, b);
-    r = r * (1 - s) + 0.235 * s;
-    g = g * (1 - s) + 0.215 * s;
-    bl = bl * (1 - s) + 0.175 * s;
+  if (s < DAM_S && b < RES_LEVEL + 0.7) {
+    const st = sstep(RES_LEVEL + 0.7, RES_LEVEL - 2.5, b);
+    r = r * (1 - st) + 0.235 * st;
+    g = g * (1 - st) + 0.215 * st;
+    bl = bl * (1 - st) + 0.175 * st;
   }
 
-  // sun-bleached rock only on the very top of the tallest rim massifs — every
-  // mid slope stays clothed in scrub/forest
-  const high = smoothstep(60, 92, b);
+  // sun-bleached rock only on the very top of the tallest flank massifs —
+  // every mid slope stays clothed in scrub/forest
+  const high = sstep(60, 92, b);
   const band = 0.5 + 0.5 * Math.sin(b * 0.55 + n2 * 4.2); // large rock strata
   r = r * (1 - high) + (0.42 + 0.07 * band + 0.03 * n) * high;
   g = g * (1 - high) + (0.33 + 0.055 * band + 0.025 * n) * high;

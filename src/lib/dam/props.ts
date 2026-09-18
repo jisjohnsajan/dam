@@ -1,8 +1,22 @@
-// 3D props: detailed dam monoliths & gates, Kerala-style houses, palms & trees,
-// roads & bridge, gauge stations, infra markers, floating debris, audio.
+// 3D props: detailed dam monoliths & gates (DIAGONAL corner dam), Kerala-style
+// houses, palms & trees, roads & bridge, gauge stations, infra markers,
+// floating debris, audio.
+//
+// The dam + powerhouse are authored in a LOCAL dam frame (u = downstream,
+// w = along-crest with w = -t) and mounted with rotation.y = -45° at the
+// top-left corner, so the whole structure faces diagonally down the valley
+// (reference map layout). See terrain.ts for the rotated frame definition.
 import * as THREE from 'three';
-import { LX, LZ, DAM_X, CREST, RES_LEVEL, bedAt, APRON_TOP, BLOCK_Z0, BLOCK_Z1, BLOCK_N, BLOCK_W } from './terrain';
+import { LX, LZ, DAM_S, CREST, RES_LEVEL, bedAt, APRON_TOP, BLOCK_Z0, BLOCK_Z1, BLOCK_N, BLOCK_W, SC, st2xz, axisT } from './terrain';
 import { GAUGES } from '@/lib/damsafe/config';
+
+// Local dam frame → world. u: downstream from the upstream face, w: along the
+// crest (w = -t; w=5 is the NE abutment end, w=61 the SW end at the edge).
+const ANCHOR_X = DAM_S * SC;
+const ANCHOR_Z = DAM_S * SC - LZ / 2;
+export function damXZ(u: number, w: number): [number, number] {
+  return [ANCHOR_X + (u - w) * SC, ANCHOR_Z + (u + w) * SC];
+}
 
 // ---------------------------------------------------------------- CPU flow field
 // Downsampled readback of the GPU state, used for prop physics + stats.
@@ -104,8 +118,8 @@ function makeAsphaltTex(): THREE.Texture {
 // ------------------------------------------------------------------- dam meshes
 export interface BreachBlock {
   group: THREE.Group;
-  z0: number;
-  z1: number;
+  z0: number; // block span start (t, rotated frame)
+  z1: number; // block span end (t)
 }
 
 export interface DamProps {
@@ -126,7 +140,9 @@ export function buildDam(): DamProps {
   const steel = new THREE.MeshStandardMaterial({ color: 0x5d6870, roughness: 0.5, metalness: 0.55 });
   const paintWhite = new THREE.MeshStandardMaterial({ color: 0xd8d5cc, roughness: 0.7, metalness: 0.05 });
 
-  const monolith = (z0: number, z1: number, crestY: number, mat: THREE.Material): THREE.Mesh => {
+  // monolith profile in the LOCAL dam frame: x = downstream (u), extruded
+  // along z = along-crest (w). Crest span w ∈ [5, 61] (t ∈ [-61, -5]).
+  const monolith = (w0: number, w1: number, crestY: number, mat: THREE.Material): THREE.Mesh => {
     const s = new THREE.Shape();
     s.moveTo(0, 6);
     s.lineTo(0, crestY);
@@ -134,8 +150,8 @@ export function buildDam(): DamProps {
     s.lineTo(8.6, 9.0);
     s.lineTo(8.6, 6);
     s.lineTo(0, 6);
-    const geo = new THREE.ExtrudeGeometry(s, { depth: z1 - z0, bevelEnabled: false, curveSegments: 1 });
-    geo.translate(DAM_X, 0, z0);
+    const geo = new THREE.ExtrudeGeometry(s, { depth: w1 - w0, bevelEnabled: false, curveSegments: 1 });
+    geo.translate(0, 0, w0);
     const m = new THREE.Mesh(geo, mat);
     m.castShadow = true;
     m.receiveShadow = true;
@@ -144,35 +160,35 @@ export function buildDam(): DamProps {
 
   // crest roadway + railings + lamps (across the whole dam — the outer ends
   // run into the raised abutment rock so the structure reads as complete)
-  const CREST_Z0 = -46, CREST_Z1 = 46;
+  const CREST_W0 = 3, CREST_W1 = 63;
   const roadTex = makeAsphaltTex();
   roadTex.repeat.set(1, 10);
   const crestRoad = new THREE.Mesh(
-    new THREE.BoxGeometry(3.1, 0.22, CREST_Z1 - CREST_Z0),
+    new THREE.BoxGeometry(3.1, 0.22, CREST_W1 - CREST_W0),
     new THREE.MeshStandardMaterial({ map: roadTex, roughness: 0.85, metalness: 0.03 }),
   );
-  crestRoad.position.set(DAM_X + 1.7, CREST + 0.1, 0);
+  crestRoad.position.set(1.7, CREST + 0.1, (CREST_W0 + CREST_W1) / 2);
   crestRoad.castShadow = crestRoad.receiveShadow = true;
   group.add(crestRoad);
 
   // railing posts (instanced) + rails
-  const postCount = Math.floor((CREST_Z1 - CREST_Z0) / 2.4);
+  const postCount = Math.floor((CREST_W1 - CREST_W0) / 2.4);
   const postGeo = new THREE.BoxGeometry(0.09, 0.85, 0.09);
   const posts = new THREE.InstancedMesh(postGeo, steel, postCount * 2);
   const m4 = new THREE.Matrix4();
   let pi = 0;
   for (let i = 0; i < postCount; i++) {
-    const z = CREST_Z0 + 1 + i * 2.4;
-    for (const side of [DAM_X + 0.3, DAM_X + 3.1]) {
-      m4.makeTranslation(side, CREST + 0.62, z);
+    const w = CREST_W0 + 1 + i * 2.4;
+    for (const side of [0.3, 3.1]) {
+      m4.makeTranslation(side, CREST + 0.62, w);
       posts.setMatrixAt(pi++, m4);
     }
   }
   posts.castShadow = true;
   group.add(posts);
-  for (const side of [DAM_X + 0.3, DAM_X + 3.1]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, CREST_Z1 - CREST_Z0), steel);
-    rail.position.set(side, CREST + 1.0, 0);
+  for (const side of [0.3, 3.1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, CREST_W1 - CREST_W0), steel);
+    rail.position.set(side, CREST + 1.0, (CREST_W0 + CREST_W1) / 2);
     group.add(rail);
     const rail2 = rail.clone();
     rail2.position.y = CREST + 0.55;
@@ -180,96 +196,98 @@ export function buildDam(): DamProps {
   }
 
   // lamp posts
-  for (let z = -42; z <= 42; z += 14) {
+  for (let w = 8; w <= 58; w += 10) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 2.6, 6), steel);
-    pole.position.set(DAM_X + 3.0, CREST + 1.5, z);
+    pole.position.set(3.0, CREST + 1.5, w);
     pole.castShadow = true;
     const arm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.05, 0.05), steel);
-    arm.position.set(DAM_X + 2.65, CREST + 2.78, z);
+    arm.position.set(2.65, CREST + 2.78, w);
     const head = new THREE.Mesh(
       new THREE.CylinderGeometry(0.12, 0.16, 0.14, 8),
       new THREE.MeshStandardMaterial({ color: 0xe8e4d4, emissive: 0x535134, roughness: 0.5 }),
     );
-    head.position.set(DAM_X + 2.3, CREST + 2.72, z);
+    head.position.set(2.3, CREST + 2.72, w);
     group.add(pole, arm, head);
   }
 
   // intact outer monoliths — extended deep into both abutments (the raised
   // flank terrain swallows the outer ends, keying the dam into the rock)
-  group.add(monolith(-46, BLOCK_Z0, CREST, concrete));
-  group.add(monolith(BLOCK_Z1, 18, CREST, concrete));
-  group.add(monolith(18, 30, 22.8, concreteDark)); // spillway sill (matches SPILL_CREST_CLOSED)
-  group.add(monolith(30, 46, CREST, concrete));
+  // local w spans: 5..10 NE of the blocks, 34..40 between blocks & spillway,
+  // 40..52 spillway sill, 52..61 down to the SW end at the domain edge.
+  group.add(monolith(5, 10, CREST, concrete));
+  group.add(monolith(34, 40, CREST, concrete));
+  group.add(monolith(40, 52, 22.8, concreteDark)); // spillway sill (SPILL_CREST_CLOSED)
+  group.add(monolith(52, 61, CREST, concrete));
 
   // abutment contact detail: stepped gallery blocks where the monoliths meet
   // the rising rock (small concrete steps climbing the shoulder line)
-  for (const side of [-1, 1]) {
+  for (const wc of [7, 56]) {
     for (let k = 0; k < 4; k++) {
-      const zc = side * (36.5 + k * 2.0);
       const step = new THREE.Mesh(
         new THREE.BoxGeometry(7.5, 1.2, 2.1),
         concreteDark,
       );
       const gy = CREST - 0.2 + k * 1.2;
-      step.position.set(DAM_X + 4.3, gy, zc);
-      step.rotation.y = side * 0.06;
+      step.position.set(4.3, gy, wc + (wc < 30 ? -k * 2.0 : k * 2.0));
       step.castShadow = step.receiveShadow = true;
       group.add(step);
     }
   }
 
   // --- spillway: 3 piers, 2 radial gates, hoist bridge, trunnion arms
-  const pierZ = [18.7, 24.0, 29.3];
-  for (const zc of pierZ) {
-    const pier = new THREE.Mesh(new THREE.BoxGeometry(2.6, 15.2, 1.5), concreteDark);
-    pier.position.set(DAM_X + 2.2, 17.4, zc);
+  // (aligned with the simulated gate band t ∈ [-52, -40] → w ∈ [40, 52])
+  const pierW = [40.7, 46.0, 51.3];
+  for (const wc of pierW) {
+    const pier = new THREE.Mesh(new THREE.BoxGeometry(1.5, 15.2, 2.6), concreteDark);
+    pier.position.set(2.2, 17.4, wc);
     pier.castShadow = pier.receiveShadow = true;
     group.add(pier);
     const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.75, 2.6, 8, 1, false, 0, Math.PI), concreteDark);
-    nose.rotation.set(Math.PI / 2, 0, Math.PI / 2);
-    nose.position.set(DAM_X + 0.9, 17.4, zc);
+    nose.rotation.set(0, Math.PI / 2, Math.PI / 2);
+    nose.position.set(0.9, 17.4, wc);
     group.add(nose);
   }
   const hoistDeck = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.7, 12.4), concreteDark);
-  hoistDeck.position.set(DAM_X + 2.2, 25.3, 24);
+  hoistDeck.position.set(2.2, 25.3, 46);
   hoistDeck.castShadow = true;
   group.add(hoistDeck);
   const hoistRoof = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.28, 12.8), paintWhite);
-  hoistRoof.position.set(DAM_X + 2.2, 26.6, 24);
+  hoistRoof.position.set(2.2, 26.6, 46);
   group.add(hoistRoof);
-  for (const zh of [21.4, 26.6]) {
+  for (const wh of [43.4, 48.6]) {
     const col = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.1, 0.18), steel);
-    col.position.set(DAM_X + 1.15, 26.0, zh);
+    col.position.set(1.15, 26.0, wh);
     group.add(col, col.clone().translateX(2.1));
   }
 
   const gates: THREE.Mesh[] = [];
-  for (const zc of [21.3, 26.7]) {
-    const gate = new THREE.Mesh(new THREE.BoxGeometry(0.9, 7.5, 4.9), steel);
-    gate.position.set(DAM_X + 2.2, 19.05, zc); // closed gate top = 22.8 (sill elevation)
+  for (const wc of [43.3, 48.7]) {
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(4.9, 7.5, 0.9), steel);
+    gate.position.set(2.2, 19.05, wc); // closed gate top = 22.8 (sill elevation)
     gate.castShadow = true;
     group.add(gate);
     gates.push(gate);
     // trunnion arm + hub
     const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 4.6, 6), steel);
-    arm.rotation.z = Math.PI / 2 - 0.62;
-    arm.position.set(DAM_X + 3.6, 16.4, zc);
+    arm.rotation.x = -(Math.PI / 2 - 0.62);
+    arm.position.set(3.6, 16.4, wc);
     group.add(arm);
     const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.6, 8), steel);
     hub.rotation.x = Math.PI / 2;
-    hub.position.set(DAM_X + 5.2, 14.9, zc);
+    hub.position.set(5.2, 14.9, wc);
     group.add(hub);
   }
 
   // upstream algal stain band (slightly proud of the face, subtle)
   const stainBand = new THREE.Mesh(
-    new THREE.BoxGeometry(0.08, 2.0, 88),
+    new THREE.BoxGeometry(88, 2.0, 0.08),
     new THREE.MeshStandardMaterial({ color: 0x6b7362, roughness: 0.95, transparent: true, opacity: 0.16 }),
   );
-  stainBand.position.set(DAM_X - 0.05, RES_LEVEL - 0.6, 0);
+  stainBand.rotation.y = Math.PI / 2;
+  stainBand.position.set(-0.05, RES_LEVEL - 0.6, 33);
   group.add(stainBand);
 
-  // control building on the right abutment
+  // control building on the north-east abutment
   const bld = new THREE.Group();
   const bBody = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.6, 4.4), paintWhite);
   bBody.position.y = 1.3;
@@ -287,26 +305,29 @@ export function buildDam(): DamProps {
   );
   bDoor.position.set(-1.72, 0.75, 0);
   bld.add(bBody, bRoof, bWin, bDoor);
-  bld.position.set(DAM_X + 5.4, CREST, 33.4);
+  bld.position.set(5.4, CREST, 7);
   group.add(bld);
   // mast + antenna
   const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 3.4, 6), steel);
-  mast.position.set(DAM_X + 4.6, CREST + 4.6, 33.4);
+  mast.position.set(4.6, CREST + 4.6, 7);
   group.add(mast);
 
   // --- breach monolith blocks (each sinks individually during a scenario)
+  // block b spans t ∈ [BLOCK_Z0 + b·W, …] → local w ∈ [−t1, −t0]
   const breachBlocks: BreachBlock[] = [];
   for (let b = 0; b < BLOCK_N; b++) {
-    const z0 = BLOCK_Z0 + b * BLOCK_W;
-    const z1 = z0 + BLOCK_W;
+    const t0 = BLOCK_Z0 + b * BLOCK_W;
+    const t1 = t0 + BLOCK_W;
+    const w0 = -t1;
+    const w1 = -t0;
     const bg = new THREE.Group();
-    bg.add(monolith(z0, z1, CREST, concrete));
+    bg.add(monolith(w0, w1, CREST, concrete));
     // parapet segment on top of the block
-    const len = z1 - z0;
+    const len = w1 - w0;
     const p1 = new THREE.Mesh(new THREE.BoxGeometry(0.45, 1.0, len), concreteDark);
-    p1.position.set(DAM_X + 0.25, CREST + 0.5, z0 + len / 2);
+    p1.position.set(0.25, CREST + 0.5, w0 + len / 2);
     const p2 = p1.clone();
-    p2.position.x = DAM_X + 3.15;
+    p2.position.x = 3.15;
     p1.castShadow = p2.castShadow = true;
     bg.add(p1, p2);
     // crest road patch belongs to the block so it sinks with it
@@ -316,29 +337,33 @@ export function buildDam(): DamProps {
     );
     (patch.material as THREE.MeshStandardMaterial).map!.repeat.set(1, 1);
     (patch.material as THREE.MeshStandardMaterial).map!.needsUpdate = true;
-    patch.position.set(DAM_X + 1.7, CREST + 0.1, z0 + len / 2);
+    patch.position.set(1.7, CREST + 0.1, w0 + len / 2);
     patch.castShadow = true;
     bg.add(patch);
     group.add(bg);
-    breachBlocks.push({ group: bg, z0, z1 });
+    breachBlocks.push({ group: bg, z0: t0, z1: t1 });
   }
 
   // stilling-basin apron + baffle blocks downstream — sits ON the channel bed
   // at the same elevation as the simulated apron shelf (APRON_TOP), so breach
   // flow visibly crashes onto it and churns over the baffles instead of
-  // disappearing under a floating slab
-  const apron = new THREE.Mesh(new THREE.BoxGeometry(14, 0.35, 60), concreteDark);
-  apron.position.set(DAM_X + 15.6, APRON_TOP - 0.175, 0);
+  // disappearing under a floating slab (local: u 8.6..22.6, w 11..47)
+  const apron = new THREE.Mesh(new THREE.BoxGeometry(14, 0.35, 36), concreteDark);
+  apron.position.set(15.6, APRON_TOP - 0.175, 29);
   apron.receiveShadow = true;
   group.add(apron);
   for (let i = 0; i < 3; i++) {
-    for (let z = -24; z <= 24; z += 6) {
-      const baf = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 1.4), concreteDark);
-      baf.position.set(DAM_X + 10 + i * 4.5, APRON_TOP + 0.55, z + (i % 2) * 3);
+    for (let w = 13; w <= 45; w += 6) {
+      const baf = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.1, 0.9), concreteDark);
+      baf.position.set(10 + i * 4.5, APRON_TOP + 0.55, w + (i % 2) * 3);
       baf.castShadow = true;
       group.add(baf);
     }
   }
+
+  // mount the whole dam in the rotated corner frame (faces down-valley at 45°)
+  group.rotation.y = -Math.PI / 4;
+  group.position.set(ANCHOR_X, 0, ANCHOR_Z);
 
   return { group, breachBlocks, gates, stainBand };
 }
@@ -433,23 +458,30 @@ function concreteGrey(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color: 0xa5a099, roughness: 0.94, metalness: 0.0 });
 }
 
+// Detailed flood-interactive homes: riverside villas upstream (village reach),
+// town-edge cottages and floodplain farmsteads — authored in (s,t).
 export function buildHouses(): { houses: House[]; group: THREE.Group } {
   const group = new THREE.Group();
   const houses: House[] = [];
-  // riverside villas on both banks + outer-ring cottages — the detailed,
-  // flood-interactive homes (the instanced districts handle bulk density)
-  const spots: [number, number][] = [
-    [140, -18], [148, -22], [158, -19], [145, 21], [156, 24], [166, 18],
-    [163, -25], [173, -22], [179, 21], [151, 29],
-    [131, -19.5], [134, 17.5], [183, -20.5], [185, 18.5], [152, -29],
-    [169, 30.5], [141, -25.5], [187, 24.5], [129, 21.5], [155, 16.2],
+  const ST: [number, number][] = [
+    // village reach on the right bench upstream of the town
+    [80, -10], [84, -6], [88, -12], [92, -7], [84, -16], [90, -17],
+    [78, -16], [94, -13], [86, -3], [96, -18],
+    // west edge of the town (low-rise quarter)
+    [98, -34], [102, -40], [96, -42], [104, -30], [100, -26],
+    // east town edge toward the highway
+    [128, -24], [132, -18], [136, -26], [130, -10], [134, -32],
+    // floodplain farmsteads (lower reach)
+    [144, -34], [150, -26], [156, -36], [148, -20], [138, -40],
+    [152, -42], [140, -14], [158, -30], [146, -46], [154, -16],
   ];
-  spots.forEach(([x, z], idx) => {
+  ST.forEach(([s, t], idx) => {
+    const [x, z] = st2xz(s, t);
     const ground = bedAt(x, z);
     if (ground < 3.2 || ground > 18) return; // stay on habitable ground
     const g = makeHouse(idx);
     g.position.set(x, ground, z);
-    g.rotation.y = (idx * 0.9) % (Math.PI * 2);
+    g.rotation.y = -Math.PI / 4 + ((idx * 0.9) % (Math.PI * 2)) * 0.35;
     group.add(g);
     houses.push({ group: g, ground, prog: 0 });
   });
@@ -537,29 +569,51 @@ function makeBanana(rnd: number): THREE.Group {
   return g;
 }
 
+// Feature trees: riverbank gallery along the diagonal channel, reservoir
+// shore clusters, floodplain strands — authored in (s,t) + shoreline scan.
 export function buildTrees(): { trees: Tree[]; group: THREE.Group } {
   const group = new THREE.Group();
   const trees: Tree[] = [];
-  const spots: [number, number, number][] = [
-    // x, z, kind (0 palm, 1 broadleaf, 2 banana) — kept on the reservoir's
-    // south shore slopes (t beyond the wall line) so nothing stands in the lake
-    [96, -45, 0], [104, 43, 0], [88, 44, 1], [128, -26, 0], [136, 26, 0], [152, -25, 1],
-    [166, 26, 0], [120, 30, 2], [100, -45, 1], [174, -17, 0], [86, 45, 0], [146, -30, 0],
-    [132, 32, 1], [160, 31, 2], [170, 30, 0], [185, 24, 1], [186, -24, 0], [175, -28, 2],
-    [155, -30, 0], [142, 31, 0], [124, -31, 1], [112, 44, 0], [92, 44, 2], [181, 27, 0],
-    // riverbank gallery along the downstream channel + reservoir shore clusters
-    [124, -14.6, 1], [131, 14.8, 0], [139, -15.2, 0], [147, 15.4, 2], [154, -14.8, 1],
-    [161, 15.0, 0], [168, -15.4, 1], [175, 15.2, 0], [182, -15.0, 2], [188, 15.6, 1],
-    [126, 44, 1], [138, -43, 0], [150, 43.5, 0], [160, -43.5, 2], [172, 43, 1],
+  const pts: { x: number; z: number; kind: number }[] = [];
+  const rnd = (i: number) => ((Math.sin(i * 127.1) * 43758.5453) % 1 + 1) % 1;
+  // riverbank gallery along both banks of the diagonal channel
+  for (let s = 76; s <= 218; s += 3.4) {
+    const az = axisT(s);
+    for (const side of [1, -1]) {
+      const t = az + side * (13.5 + rnd(s * side) * 5);
+      const [x, z] = st2xz(s, t);
+      if (x < 2 || x > 158 || z < -78 || z > 78) continue;
+      pts.push({ x, z, kind: Math.floor(rnd(s * 3 + side) * 3) });
+    }
+  }
+  // reservoir shore cluster (just above the waterline around the corner lake)
+  for (let x = 2; x <= 62; x += 2.6) {
+    for (let z = -79; z <= 6; z += 2.6) {
+      const g = bedAt(x, z);
+      if (g < 22.2 || g > 28) continue;
+      if (rnd(x * 7 + z * 3) < 0.62) continue;
+      pts.push({ x: x + (rnd(x + z) - 0.5), z: z + (rnd(x * 2 + z) - 0.5), kind: Math.floor(rnd(x * 5 + z) * 3) });
+    }
+  }
+  // floodplain strands + gorge outcrop trees
+  const strand: [number, number][] = [
+    [96, 24], [104, 30], [112, 36], [98, -30], [110, -38], [122, 26],
+    [132, 34], [140, 6], [150, -12], [158, 20], [166, -6], [174, 14],
+    [130, -30], [142, -20], [120, -44], [136, -48],
   ];
-  spots.forEach(([x, z, kind], idx) => {
+  for (const [s, t] of strand) {
+    const [x, z] = st2xz(s, t);
+    pts.push({ x, z, kind: Math.floor(rnd(s + t) * 3) });
+  }
+  pts.forEach(({ x, z, kind }, idx) => {
     const ground = bedAt(x, z);
-    const rnd = ((x * 13 + z * 7) % 10) / 10;
-    const g = kind === 0 ? makePalm(rnd) : kind === 1 ? makeBroadleaf(rnd) : makeBanana(rnd);
+    if (ground < 3.2 || ground > 30) return; // stay on vegetable ground
+    const r = rnd(x * 13 + z * 7);
+    const g = kind === 0 ? makePalm(r) : kind === 1 ? makeBroadleaf(r) : makeBanana(r);
     g.position.set(x, ground - 0.05, z);
     const s = 0.85 + ((idx * 37) % 10) / 28;
     g.scale.setScalar(s);
-    g.rotation.y = rnd * Math.PI * 2;
+    g.rotation.y = r * Math.PI * 2;
     group.add(g);
     trees.push({ group: g, ground, prog: 0 });
   });
@@ -577,8 +631,8 @@ export function buildRoads(): { group: THREE.Group } {
     const pos: number[] = [];
     const idxArr: number[] = [];
     for (let i = 0; i < pts.length - 1; i++) {
-      for (let s = 0; s < 4; s++) {
-        const t0 = s / 4, t1 = (s + 1) / 4;
+      for (let k = 0; k < 4; k++) {
+        const t0 = k / 4, t1 = (k + 1) / 4;
         const x0 = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t0;
         const z0 = pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t0;
         const x1 = pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t1;
@@ -604,54 +658,27 @@ export function buildRoads(): { group: THREE.Group } {
     group.add(mesh);
   };
 
-  // main valley road along the +z bench
-  roadRibbon([
-    [117, 27.5], [124, 26], [132, 24.8], [140, 23.2], [148, 22.2], [156, 21.2],
-    [164, 20.2], [172, 19.6], [180, 20.2], [188, 21.8],
-  ]);
-  // spur along the -z bench
-  roadRibbon([
-    [117, -27.5], [124, -26.5], [132, -25.5], [140, -24.5], [148, -23.5], [156, -23],
-    [164, -23.5], [172, -24], [180, -24.5], [188, -25],
-  ]);
-  // access spur to the bridge head
-  roadRibbon([[148, 22.4], [150, 20], [150, 17]], 2.6);
-  roadRibbon([[150, -17], [150, -20], [148, -23.2]], 2.6);
+  // valley roads following both banks of the diagonal channel
+  const swBank: [number, number][] = [];
+  const neBank: [number, number][] = [];
+  for (let s = 76; s <= 196; s += 6) {
+    const [x1, z1] = st2xz(s, axisT(s) - 16.5);
+    swBank.push([x1, z1]);
+    const [x2, z2] = st2xz(s + 3, axisT(s + 3) + 15.5);
+    neBank.push([x2, z2]);
+  }
+  roadRibbon(swBank);
+  roadRibbon(neBank);
 
-  // center dashes on the main road
-  for (let i = 0; i < 26; i++) {
-    const x = 119 + i * 2.7;
-    const z = 26.2 - (x - 119) * 0.075;
+  // centre dashes on the downstream (NE) bank road
+  for (let i = 0; i < neBank.length - 1; i += 2) {
+    const [ax, az] = neBank[i];
+    const [bx, bz] = neBank[i + 1];
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
     const dash = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.02, 0.22), lineMat);
-    dash.position.set(x, bedAt(x, z) + 0.18, z);
-    dash.rotation.y = -0.35;
+    dash.position.set(mx, bedAt(mx, mz) + 0.18, mz);
+    dash.rotation.y = Math.atan2(bx - ax, bz - az) + Math.PI / 2;
     group.add(dash);
-  }
-
-  // bridge over the channel at x = 150
-  const bridgeY = bedAt(150, 0) + 3.4;
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.5, 52), concreteGrey());
-  deck.position.set(150, bridgeY, 0);
-  deck.castShadow = deck.receiveShadow = true;
-  group.add(deck);
-  const deckRoad = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.06, 52), asphalt);
-  deckRoad.position.set(150, bridgeY + 0.28, 0);
-  group.add(deckRoad);
-  for (const s of [-1, 1]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.5, 52), lineMat);
-    rail.position.set(150 + s * 1.95, bridgeY + 0.55, 0);
-    group.add(rail);
-    for (let z = -24; z <= 24; z += 4) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.55, 0.1), lineMat);
-      post.position.set(150 + s * 1.95, bridgeY + 0.35, z);
-      group.add(post);
-    }
-  }
-  for (const zc of [-7, 7]) {
-    const pier = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.7, bridgeY - bedAt(150, zc) + 0.6, 8), concreteGrey());
-    pier.position.set(150, bedAt(150, zc) + (bridgeY - bedAt(150, zc)) / 2, zc);
-    pier.castShadow = true;
-    group.add(pier);
   }
   return { group };
 }
@@ -696,17 +723,19 @@ export interface InfraPin {
   baseColor: number;
 }
 
+// pins sit on the reference landmarks (positions match config.infra)
 export function buildInfraMarkers(): { group: THREE.Group; pins: InfraPin[] } {
   const group = new THREE.Group();
   const pins: InfraPin[] = [];
   const colors: Record<string, number> = {
     hospital: 0xe34d4d, school: 0xe0a63c, bridge: 0x39c3d8, substation: 0x9a6ae0, waterworks: 0x2fae7e,
   };
-  const kindOf: [number, number, string][] = [
-    [164, -21, 'hospital'], [146, 25, 'school'], [180, -15, 'school'],
-    [150, 2, 'bridge'], [172, 18, 'substation'], [127, -24, 'waterworks'],
+  const ST: [number, number, string][] = [
+    [120, -14, 'hospital'], [106, -26, 'school'], [100, -20, 'school'],
+    [122, -4, 'bridge'], [140, -48, 'substation'], [88, -36, 'waterworks'],
   ];
-  for (const [x, z, kind] of kindOf) {
+  for (const [s, t, kind] of ST) {
+    const [x, z] = st2xz(s, t);
     const ground = bedAt(x, z);
     const baseColor = colors[kind];
     const mat = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.5, emissive: baseColor, emissiveIntensity: 0.25 });
@@ -755,11 +784,15 @@ export function buildWarningSigns(): { group: THREE.Group } {
     g.rotation.y = yaw;
     group.add(g);
   };
-  // valley road approaches (both banks) + town-side expressway ramp
-  makeSign(119.5, 24.6, 2.6);
-  makeSign(119.5, -24.8, -2.6);
-  makeSign(146.5, 22.8, 2.9);
-  makeSign(153.5, -21.6, -2.9);
+  // valley road approaches (both banks) + town-side approach
+  const signSpot = (s: number, t: number, yaw: number): void => {
+    const [x, z] = st2xz(s, t);
+    makeSign(x, z, yaw);
+  };
+  signSpot(80, -21, 2.6 - Math.PI / 4);
+  signSpot(84, 8, -2.6 - Math.PI / 4);
+  signSpot(138, -36, 2.9 - Math.PI / 4);
+  signSpot(146, 14, -2.9 - Math.PI / 4);
   return { group };
 }
 
@@ -767,9 +800,10 @@ export function buildWarningSigns(): { group: THREE.Group } {
 export function buildDockBoats(): { group: THREE.Group; boats: { mesh: THREE.Object3D }[] } {
   const group = new THREE.Group();
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x7a5c3a, roughness: 0.9 });
-  // jetty
-  const dockX = 97, dockZ = -19;
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(7, 0.22, 2.2), woodMat);
+  // jetty reaching into the corner lake (upstream reach)
+  const [dockX, dockZ] = st2xz(46, -32);
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.22, 7), woodMat);
+  deck.rotation.y = -Math.PI / 4;
   deck.position.set(dockX, RES_LEVEL + 0.35, dockZ);
   deck.castShadow = deck.receiveShadow = true;
   group.add(deck);
@@ -807,13 +841,15 @@ export function buildBoulders(): { group: THREE.Group } {
   const matDark = new THREE.MeshStandardMaterial({ color: 0x6e6a62, roughness: 0.98, flatShading: true });
   const rnd = (i: number) => ((Math.sin(i * 127.1) * 43758.5453) % 1 + 1) % 1;
   for (let i = 0; i < 16; i++) {
-    const onBench = i % 4 !== 3;
-    const x = 60 + rnd(i) * 128;
-    const z = onBench ? (rnd(i + 9) > 0.5 ? 1 : -1) * (33 + rnd(i + 3) * 5) : (rnd(i + 5) - 0.5) * 16;
-    const wx = Math.min(x, 188);
-    const s = 0.7 + rnd(i + 7) * 1.6;
-    const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 0), i % 2 ? mat : matDark);
-    rock.position.set(wx, bedAt(wx, z) + s * 0.25, z);
+    const onBank = i % 4 !== 3;
+    const s = 76 + rnd(i) * 130;
+    const t = onBank
+      ? axisT(s) + (rnd(i + 9) > 0.5 ? 1 : -1) * (12 + rnd(i + 3) * 4)
+      : axisT(s) + (rnd(i + 5) - 0.5) * 16;
+    const [wx, wz] = st2xz(Math.min(s, 220), t);
+    const sz = 0.7 + rnd(i + 7) * 1.6;
+    const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(sz, 0), i % 2 ? mat : matDark);
+    rock.position.set(wx, bedAt(wx, wz) + sz * 0.25, wz);
     rock.rotation.set(rnd(i) * 3, rnd(i + 1) * 3, rnd(i + 2) * 3);
     rock.castShadow = rock.receiveShadow = true;
     group.add(rock);
@@ -830,12 +866,14 @@ export interface Barrel {
   reset: () => void;
 }
 
+// barrels float in the reservoir near the breach zone and wash through it
 export function buildBarrels(): { barrels: Barrel[]; group: THREE.Group } {
   const group = new THREE.Group();
   const colors = [0xb4552d, 0xc9a227, 0x7d8b99, 0xa33c2a, 0x5e7a52];
   const barrels: Barrel[] = [];
-  const starts: [number, number][] = [[70, -8], [82, 6], [92, -12], [98, 10], [60, 14]];
-  starts.forEach(([x, z], i) => {
+  const ST: [number, number][] = [[52, -26], [54, -18], [50, -34], [56, -42], [48, -22]];
+  ST.forEach(([s, t], i) => {
+    const [x, z] = st2xz(s, t);
     const mesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.45, 0.45, 1.05, 14),
       new THREE.MeshStandardMaterial({ color: colors[i], roughness: 0.7, metalness: 0.25 }),
@@ -900,7 +938,9 @@ export class RiverAudio {
       const len = ctx.sampleRate * 2;
       const buf = ctx.createBuffer(1, len, ctx.sampleRate);
       const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      for (let i = 0; i < len; i++) {
+        d[i] = Math.random() * 2 - 1;
+      }
 
       const master = ctx.createGain();
       master.gain.value = 0;
