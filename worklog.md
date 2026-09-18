@@ -733,3 +733,18 @@ Stage Summary:
 - Destruction now travels WITH the water: buildings crumble and char in the flow, trees wash downstream, wreckage persists along the flood path after the wave passes; Reset restores all.
 - The map's green surround is reduced to a low hazy backdrop; the square canvas (dam top-left, river, city, farms) dominates the frame.
 - Key files: src/lib/dam/world.ts, src/lib/dam/engine.ts.
+
+---
+Task ID: push-github-dam
+Agent: Super Z (main)
+Task: Push current build to https://github.com/jisjohnsajan/dam
+
+Work Log:
+- Verified working tree clean; current build fully committed (HEAD 0fb9d80 includes world.ts/engine.ts changes + verification screenshots)
+- Added remote origin -> https://github.com/jisjohnsajan/dam.git
+- Set credential.helper=store for one-time token persistence
+- Tested repo: HTTPS 404 (repo does not exist publicly or is private) and git ls-remote fails: could not read Username — no GitHub credentials in environment (no gh CLI, no SSH keys, no tokens in env/.netrc)
+
+Stage Summary:
+- Push BLOCKED on authentication only. Repo fully prepared: git push -u origin main will succeed the moment credentials are available (PAT with repo scope), e.g. git push https://<TOKEN>@github.com/jisjohnsajan/dam.git main
+- User must either provide a GitHub Personal Access Token or create the repo at github.com/new (if not existing) and supply auth
