@@ -152,7 +152,9 @@ export const GAUGES = [
 ] as const;
 
 export const SCENARIO_DEFAULTS = {
-  levelFrac: 0.82,
+  // lowered default so the reservoir idles well below the crest (≈ 18.5 m
+  // demo elevation) — matches RES_LEVEL in lib/dam/terrain.ts
+  levelFrac: 0.44,
   mechanism: 'structural' as FailureMechanism,
   breachWidthM: 100, // real metres
   formationMin: 30, // real minutes

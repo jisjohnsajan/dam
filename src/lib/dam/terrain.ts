@@ -2,8 +2,9 @@
 // DIAGONAL CORNER MAP (reference satellite diorama): the dam + reservoir
 // occupy the TOP-LEFT corner with the dam wall running DIAGONALLY (45°) across
 // the corner; the river/flood flows down-right toward the BOTTOM-RIGHT corner
-// through a broad floodplain flanked by big green ranges (top-right and
-// bottom-left). x ∈ [0, LX] west → east, z ∈ [-LZ/2, LZ/2] north → south
+// through a broad floodplain between low green hills — the far canvas corners
+// fall away to a matte base shelf (no excess land). x ∈ [0, LX] west → east,
+// z ∈ [-LZ/2, LZ/2] north → south
 // (screen top = -z). Sim texture uv: u = x / LX, v = (z + LZ/2) / LZ.
 //
 // All valley geometry is authored in a rotated frame:
@@ -47,7 +48,8 @@ export const T_DAM1 = -5; // dam span end (t) — into the NE abutment
 // sits mostly west of this line so the reservoir drive region stays correct).
 export const DAM_X = 40;
 export const CREST = 23; // main crest elevation (m)
-export const RES_LEVEL = 21.5; // default reservoir surface elevation
+export const RES_LEVEL = 18.5; // default reservoir surface elevation — kept
+// noticeably low at the operator's request (lake sits well below the crest)
 
 // Spillway notch band (t) — two radial gates between three piers.
 export const SPILL_Z0 = -52;
@@ -167,16 +169,22 @@ export function bedAt(x: number, z: number): number {
     floor -= 2.2 * Math.exp(-(dzo * dzo) / 100);
   }
 
-  // ---- reservoir pocket (top-left corner lake) ----------------------------
+  // ---- reservoir pocket (mountain-bounded lake behind the dam) ------------
   if (s < DAM_S) {
-    // north-east shore: a wall line running from the top edge (lake runs off
-    // the top frame near the corner) down to the dam's NE end
+    // north-east shore: a wall line running from the top edge down to the
+    // dam's NE end, keying the lake into the abutment massif
     const shoreN = Math.min(s + 1.5, -5 + 0.34 * (DAM_S - s));
     const dtn = t - shoreN;
     if (dtn > 0) floor += (1 - Math.exp(-dtn / 9)) * 22 * rough;
-    // south-west side: no wall inside the domain — the lake hugs the west
-    // edge (sealed by the boundary plug) and runs off-frame, like the
-    // reference. Rock spur under the inflow band keeps the bed deep there.
+
+    // west-shore massif — the mountains BEHIND the dam that hold the
+    // reservoir: full height against the west edge, easing inland, with a
+    // flooded inflow gorge cut at z ≈ 0 (the engine injects river inflow
+    // there). Crest heights stay well above the max scenario drive (24.4 m)
+    // so the basin never overtops its mountain walls.
+    const westAmp = 32 * sstep(30, 7, x);
+    const gorge = sstep(4.5, 10, Math.abs(z));
+    floor += westAmp * gorge * rough;
   }
 
   // ---- NE abutment massif (downstream of the dam's NE end) ----------------
@@ -200,36 +208,47 @@ export function bedAt(x: number, z: number): number {
     const wv = t > mid ? valleyWN(s) : valleyWS(s);
     const dt = Math.abs(t - mid) - wv;
     if (dt > 0) {
-      // big green ranges flanking the floodplain (top-right & bottom-left),
-      // fading near the dam gorge and the exit corner
+      // low green hills flanking the floodplain — kept modest so the map
+      // reads tight; the towering relief lives behind the dam only
       const rangeEnv =
-        sstep(78, 100, s) * (1 - sstep(190, 224, s)) * 26 +
-        4 * sstep(150, 200, s);
-      const wall = (1 - Math.exp(-dt / 16)) * (20 + rangeEnv) * rough;
+        sstep(78, 100, s) * (1 - sstep(190, 224, s)) * 5 +
+        2 * sstep(150, 200, s);
+      const wall = (1 - Math.exp(-dt / 16)) * (7 + rangeEnv) * rough;
       floor += wall;
-      // extra shoulder so the ranges read as rounded massifs, not ridges
-      floor += sstep(24, 66, dt) * rangeEnv * 0.55 * rough;
+      floor += sstep(24, 66, dt) * rangeEnv * 0.4 * rough;
     }
   }
 
   // ---- square-canvas rims (modest frame; big relief comes from the flanks)
-  // north rim — fades out over the lake so the reservoir runs off the top
-  if (z < -77) {
-    const fade = sstep(14, 34, x);
-    floor += (1 - Math.exp(-(-77 - z) / 15)) * 13 * rough * fade;
+  // north rim — mountain wall behind the reservoir (full over the lake
+  // reach), easing to a modest canvas frame downstream
+  if (z < -76) {
+    const lakeSide = 1 - sstep(30, 48, x);
+    floor += (1 - Math.exp(-(-76 - z) / 9)) * (12 + 26 * lakeSide) * rough;
   }
   // south rim — lowest, so the aerial camera sees over it
   if (z > 72) {
-    floor += (1 - Math.exp(-(z - 72) / 19)) * 14 * rough;
+    floor += (1 - Math.exp(-(z - 72) / 19)) * 9 * rough;
   }
-  // west rim — only south of the lake (the lake runs off the left frame)
+  // west rim — south of the dam (below the inflow gorge), modest shoulder
   if (x < 3 && z > 10) {
-    floor += (1 - Math.exp(-(3 - x) / 9)) * 13 * rough * sstep(10, 26, z);
+    floor += (1 - Math.exp(-(3 - x) / 9)) * 8 * rough * sstep(10, 26, z);
   }
   // east rim with the river exit gorge carved through at t ≈ 0
   if (x > 153) {
     const carve = sstep(5.5, 14, Math.abs(t - axisT(226)));
-    floor += (1 - Math.exp(-(x - 153) / 14)) * 20 * rough * (0.12 + 0.88 * carve);
+    floor += (1 - Math.exp(-(x - 153) / 14)) * 13 * rough * (0.12 + 0.88 * carve);
+  }
+
+  // ---- excess-land cut ------------------------------------------------------
+  // far canvas corners beyond the valley margins drop away to a low matte
+  // base shelf — the map keeps only the land it needs (the flood exits
+  // through the corner gorge, so wide flanks are dead weight)
+  if (s > 92) {
+    const midC = valleyMid(s);
+    const wvC = t > midC ? valleyWN(s) : valleyWS(s);
+    const dtC = Math.abs(t - midC) - wvC;
+    floor -= sstep(92, 116, s) * sstep(13, 34, dtC) * (floor - 3.1);
   }
 
   // rockiness — kept subtle on the walls so the slopes read as smooth turf
@@ -465,6 +484,13 @@ export function terrainColor(
   r = r * (1 - sand) + 0.52 * sand;
   g = g * (1 - sand) + 0.46 * sand;
   bl = bl * (1 - sand) + 0.33 * sand;
+
+  // matte diorama base — the low outer shelf beyond the escarpment (and the
+  // exit channel bed) reads as dark slate so the map sits on a clean base
+  const shelf = sstep(4.6, 3.0, b) * sstep(1.1, 0.4, slope);
+  r = r * (1 - shelf) + 0.125 * shelf;
+  g = g * (1 - shelf) + 0.13 * shelf;
+  bl = bl * (1 - shelf) + 0.122 * shelf;
 
   // dark wet sediment under the reservoir + drawdown stain ring
   if (s < DAM_S && b < RES_LEVEL + 0.7) {

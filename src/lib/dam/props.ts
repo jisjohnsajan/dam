@@ -800,8 +800,9 @@ export function buildWarningSigns(): { group: THREE.Group } {
 export function buildDockBoats(): { group: THREE.Group; boats: { mesh: THREE.Object3D }[] } {
   const group = new THREE.Group();
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x7a5c3a, roughness: 0.9 });
-  // jetty reaching into the corner lake (upstream reach)
-  const [dockX, dockZ] = st2xz(46, -32);
+  // jetty reaching into the mountain-bounded lake (east shore, just
+  // upstream of the dam face — the west shore is now the ring massif)
+  const [dockX, dockZ] = st2xz(50, -14);
   const deck = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.22, 7), woodMat);
   deck.rotation.y = -Math.PI / 4;
   deck.position.set(dockX, RES_LEVEL + 0.35, dockZ);

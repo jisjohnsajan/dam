@@ -1626,11 +1626,13 @@ export function buildFarTerrain(): { group: THREE.Group } {
     return t * t * (3 - 2 * t);
   };
 
-  // distant backdrop: forested mountain ring — tall enough to frame the
-  // valley like the reference map (green wooded slopes, tan high tops)
+  // distant backdrop: low matte base plain — the excess land around the map
+  // is gone. Only a thin, dark apron continues the island outward (and
+  // carries the exit river out of frame); the mountain continuation on the
+  // north-west still blends out of the reservoir ring.
   const ringH = (x: number, z: number): number =>
-    13 + 15 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
-     + 3.5 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
+    3.4 + 6.5 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
+     + 2.2 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
 
   const farH = (x: number, z: number): number => {
     const [s, t] = xz2st(x, z);
@@ -1640,7 +1642,7 @@ export function buildFarTerrain(): { group: THREE.Group } {
       const wv = Math.max(8, 14 - (s - 226.3) * 0.06);
       const dtn = Math.abs(t) - wv;
       const valley = Math.max(2.5, 4.5 - (s - 226.3) * 0.02)
-        + (dtn > 0 ? (1 - Math.exp(-dtn / 16)) * 18 : 0);
+        + (dtn > 0 ? (1 - Math.exp(-dtn / 16)) * 10 : 0);
       const tt = Math.max(sstep(140, 260, s), sstep(34, 66, Math.abs(t)));
       return valley + (ringH(x, z) + 2 - valley) * tt;
     }
@@ -1670,8 +1672,8 @@ export function buildFarTerrain(): { group: THREE.Group } {
       const sx = (farH(x + e, z) - farH(x - e, z)) / (2 * e);
       const sz = (farH(x, z + e) - farH(x, z - e)) / (2 * e);
       terrainColor(x, z, y, Math.sqrt(sx * sx + sz * sz), tc);
-      // keep the far ring lush: only a whisper of aerial haze so the backdrop
-      // reads as forested mountains, not a grey wall
+      // keep the outer plain subdued: a touch of aerial haze so the base
+      // reads as quiet ground, not a competing landscape
       const gr = (tc.r + tc.g + tc.b) / 3;
       const mu = 0.14;
       tc.r = tc.r * (1 - mu) + (gr * 0.78 + 0.1) * mu;

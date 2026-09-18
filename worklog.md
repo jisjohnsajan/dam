@@ -801,3 +801,20 @@ Stage Summary:
 - The map now matches the reference: corner reservoir running off the top/left frame, 45-degree concrete dam with spillway + breach blocks, powerhouse at the toe, diagonal river through gorge woodland, village + agricultural bench right, industrial estate, highway + bridge, dense town left bank with hospital/school/market, power substation lower-left, floodplain to the bottom-right exit
 - READ-ONLY systems untouched: solver/shader (uSrcBox/uResMaxX consumed as-is), engine, cameras, state machine, sensor mechanisms (only demo-world coordinates re-targeted), config data semantics
 - Known acceptable trade-offs: overview camera frames the lake partially (fixed camera system), breach debris spawn band (engine hardcodes DAM_X+1..3.5, z -13..9) falls into the gorge just below the toe, drive clamp uResMaxX still x<39.6 (lake equalizes via flow)
+
+---
+Task ID: map-tighten-1
+Agent: main (Super Z)
+Task: Remove excess land, add mountains behind dam (reservoir basin walls), reduce reservoir water height
+
+Work Log:
+- terrain.ts: RES_LEVEL 21.5 -> 18.5; added west-shore massif (32 m amp, inflow gorge gap at z~0) + north rim mountain wall (12-38 m) so the reservoir is a mountain-bounded basin behind the dam; flank ranges reduced (26 m massifs -> low 7-12 m green hills); new excess-land cut drops far canvas corners to a 3.1 m matte base shelf; rims lowered (S 14->9, W 13->8, E 20->13); terrainColor dark slate tint for the base shelf
+- world.ts: buildFarTerrain ring 13+15fbm -> 3.4+6.5fbm (low matte base plain instead of tall green mountain ring); exit valley wall 18->10
+- config.ts: SCENARIO_DEFAULTS.levelFrac 0.82 -> 0.44 (matches 18.5 m)
+- page.tsx: liveFrac useState 0.84 -> 0.44 (live twin idle level, setLiveLevel drives 3D water)
+- props.ts: dock moved st2xz(46,-32) -> st2xz(50,-14) (old spot now inside the west massif)
+- Verified via agent-browser: bedGrid samples confirm new terrain (west massif 44.7 m, north rim 55.5 m, flanks 8 m, corners 3.2 m); live level 44% draining to 18.5; dam break at 8x -> flood contained in tight valley, exits corner; Reset/pause OK; no console errors; tsc clean
+
+Stage Summary:
+- Map now reads tight: diagonal valley + mountain-bounded reservoir behind the 45-deg dam, low green flanks, dark matte base shelf corners, water idling well below crest
+- READ-ONLY respected: engine.ts untouched; sim/drive/camera/UI logic untouched (only defaults RES_LEVEL + levelFrac + liveFrac + prop placement)

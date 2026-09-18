@@ -52,7 +52,9 @@ export default function Page() {
   const [mode, setMode] = useState<'live' | 'scenario'>('live');
   const [tab, setTab] = useState<TabId>('command');
 
-  const [liveFrac, setLiveFrac] = useState(0.84);
+  // live reservoir operating point — lowered so the lake idles well below
+  // the crest (≈ 18.5 m demo elevation) instead of near-FRL 21.5 m
+  const [liveFrac, setLiveFrac] = useState(0.44);
   const [form, setForm] = useState<ScenarioForm>({
     levelFrac: SCENARIO_DEFAULTS.levelFrac,
     mechanism: SCENARIO_DEFAULTS.mechanism,
