@@ -1,7 +1,7 @@
 // GLSL shaders for the GPU shallow-water solver, water surface, foam and spray.
 // All passes render fullscreen quads; state texture layout = (eta, u, v, h).
 
-import { LX, LZ, NX, NZ, DAM_X } from './terrain';
+import { LX, LZ, NX, NZ, DAM_X, DAM_S, SC } from './terrain';
 
 export const TEXEL: [number, number] = [1 / NX, 1 / NZ];
 export const CELL: [number, number] = [LX / NX, LZ / NZ];
@@ -121,9 +121,15 @@ void main() {
   // reservoir level control — smoothly drives the lake toward the slider target.
   // Lowering applies everywhere (drains shelf cells); raising only where the bed
   // is below the target so dry land above the target level never floods.
+  // REGION TEST (rotated frame, see terrain.ts): "upstream of the dam" means
+  // s = (x + z2)·cos45° < DAM_S. The legacy straight-line test wx < uResMaxX
+  // cannot work on the diagonal corner map — west of x≈40 also contains a
+  // wedge of the DOWNSTREAM valley at the toe, which the drive would flood to
+  // lake level at rest. Purely a geometric binding fix; the drive body below
+  // is unchanged.
   if (uDriveOn > 0.5) {
-    float wx = vUv.x * uDomain.x;
-    if (wx < uResMaxX) {
+    float sRot = (vUv.x * uDomain.x + vUv.y * uDomain.y) * ${SC};
+    if (sRot < ${DAM_S - 0.6}) {
       float d = uDriveEta - eta;
       if (d < 0.0) {
         eta += clamp(d, -uDriveRate * uDt, uDriveRate * uDt);

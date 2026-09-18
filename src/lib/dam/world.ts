@@ -422,7 +422,7 @@ function buildStreets(): StreetSeg[] {
   streets.push({ pts: range(124, 152, 7).map((s) => STP(s, -20)), w: 2.8 });
   // town grid — cross streets (climbing from the bench road to the river drive)
   for (const s of [96, 104, 112, 120, 128, 136, 144, 152]) {
-    streets.push({ pts: [STP(s, -48), STP(s, axisT(s) - 14.5)], w: 2.8 });
+    streets.push({ pts: [STP(s, -44), STP(s, axisT(s) - 14.5)], w: 2.8 });
   }
   // village lanes (right bench, upstream of the town)
   streets.push({ pts: range(78, 96, 4.5).map((s) => STP(s, axisT(s) + 11)), w: 2.2 });
@@ -435,14 +435,16 @@ function buildStreets(): StreetSeg[] {
   // farm lanes — agricultural bench (NE) + south-west bench
   streets.push({ pts: range(86, 130, 7.5).map((s) => STP(s, 10)), w: 2.2 });
   streets.push({ pts: range(92, 126, 8.5).map((s) => STP(s, 22)), w: 2.0 });
-  streets.push({ pts: range(104, 138, 8.5).map((s) => STP(s, -44)), w: 2.2 });
-  // HIGHWAY: north rim → river bridge → south rim (reference right-side road)
+  streets.push({ pts: range(104, 138, 8.5).map((s) => STP(s, -38)), w: 2.2 });
+  // HIGHWAY: north-east bench → river bridge → south-west bench. Routed
+  // WITHIN the valley margins (the old rim climb read as a scar across the
+  // flank mountains).
   const hw: [number, number][] = [
-    [86, 84], [92, 68], [98, 52], [106, 34], [114, 16], [120, 0],
-    [126, -16], [132, -34], [138, -50], [144, -64], [150, -76],
+    [98, 24], [106, 20], [112, 17], [114, 16], [120, 0],
+    [126, -16], [132, -31], [138, -40],
   ];
-  streets.push({ pts: hw.slice(0, 5).map(([s, t]) => STP(s, t)), w: 4.6 }); // north approach
-  streets.push({ pts: hw.slice(5).map(([s, t]) => STP(s, t)), w: 4.6 }); // south approach
+  streets.push({ pts: hw.slice(0, 4).map(([s, t]) => STP(s, t)), w: 4.6 }); // north approach
+  streets.push({ pts: hw.slice(4).map(([s, t]) => STP(s, t)), w: 4.6 }); // south approach
   return streets;
 }
 const TOWN_STREETS: StreetSeg[] = buildStreets();
@@ -476,8 +478,9 @@ const CLEAR_RECTS: [number, number, number, number][] = [
   // farms — agricultural bench (NE)
   [88, 8, 12, 9], [96, 12, 12, 9], [104, 16, 12, 9], [112, 20, 12, 9],
   [120, 24, 12, 9], [128, 28, 12, 9], [100, 28, 12, 9], [116, 32, 11, 8],
-  // farms — SW bench + lower east plain
-  [106, -44, 12, 9], [116, -42, 12, 9], [126, -44, 12, 9], [134, -42, 11, 8],
+  // farms — SW bench + lower east plain (pulled inboard of the narrower
+  // south-west valley wall)
+  [106, -40, 12, 9], [116, -38, 12, 9], [126, -40, 12, 9], [134, -38, 11, 8],
   [146, -20, 11, 8], [156, -28, 11, 8], [164, -16, 11, 8],
   // civic landmark complexes (hospital / school / factory / waterworks / fuel)
   [120, -14, 15, 11], [106, -26, 13, 11], [118, -38, 21, 12], [88, -36, 11, 10],
@@ -767,8 +770,8 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   const DISTRICTS: { s0: number; s1: number; t0: number; t1: number; mix: 'core' | 'mid' | 'low' | 'village'; rel?: 'ne' | 'sw' }[] = [
     { s0: 102, s1: 132, t0: -40, t1: -24, mix: 'core' },
     { s0: 112, s1: 140, t0: -24, t1: -15, mix: 'mid' },
-    { s0: 92, s1: 104, t0: -46, t1: -25, mix: 'low' },
-    { s0: 116, s1: 148, t0: -48, t1: -41, mix: 'low' },
+    { s0: 92, s1: 104, t0: -42, t1: -25, mix: 'low' },
+    { s0: 116, s1: 148, t0: -45, t1: -39, mix: 'low' },
     { s0: 78, s1: 96, t0: 13, t1: 24, mix: 'village', rel: 'ne' },
     { s0: 106, s1: 132, t0: 4, t1: 15, mix: 'village' },
     { s0: 138, s1: 158, t0: -27, t1: -16, mix: 'village', rel: 'sw' },
@@ -1266,8 +1269,8 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
       { s: 104, t: 16, w: 12, d: 9, k: 2 }, { s: 112, t: 20, w: 12, d: 9, k: 0 },
       { s: 120, t: 24, w: 12, d: 9, k: 1 }, { s: 128, t: 28, w: 12, d: 9, k: 2 },
       { s: 100, t: 28, w: 11, d: 8, k: 1 }, { s: 116, t: 32, w: 11, d: 8, k: 0 },
-      { s: 106, t: -44, w: 12, d: 9, k: 1 }, { s: 116, t: -42, w: 12, d: 9, k: 2 },
-      { s: 126, t: -44, w: 12, d: 9, k: 0 }, { s: 134, t: -42, w: 11, d: 8, k: 1 },
+      { s: 106, t: -40, w: 12, d: 9, k: 1 }, { s: 116, t: -38, w: 12, d: 9, k: 2 },
+      { s: 126, t: -40, w: 12, d: 9, k: 0 }, { s: 134, t: -38, w: 11, d: 8, k: 1 },
       { s: 146, t: -20, w: 11, d: 8, k: 2 }, { s: 156, t: -28, w: 11, d: 8, k: 0 },
       { s: 164, t: -16, w: 11, d: 8, k: 1 },
     ];
@@ -1487,7 +1490,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   // POWER SUBSTATION — gravel pad, transformers, gantry + pylon cluster
   // (reference POWER SUBSTATION, lower-left bench)
   {
-    const [vx, vz] = STP(140, -48);
+    const [vx, vz] = STP(140, -42);
     const g = bedAt(vx, vz);
     const pad = new THREE.Mesh(new THREE.BoxGeometry(9.5, 0.14, 7.5), new THREE.MeshStandardMaterial({ color: 0x9a968c, roughness: 0.98 }));
     pad.rotation.y = YAW;
@@ -1511,7 +1514,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     beam.position.set(vx + 2.6 * SC, g + 4.2, vz + 2.6 * SC);
     group.add(pad, beam);
     // two dead-end pylons framing the yard
-    for (const [ps, pt] of [[137.5, -50.5], [143, -45.5]] as const) {
+    for (const [ps, pt] of [[137.5, -44.5], [143, -39.5]] as const) {
       const [px, pz] = STP(ps, pt);
       const py = makePylon(9.5);
       py.position.set(px, bedAt(px, pz), pz);
@@ -1626,13 +1629,13 @@ export function buildFarTerrain(): { group: THREE.Group } {
     return t * t * (3 - 2 * t);
   };
 
-  // distant backdrop: low matte base plain — the excess land around the map
-  // is gone. Only a thin, dark apron continues the island outward (and
-  // carries the exit river out of frame); the mountain continuation on the
-  // north-west still blends out of the reservoir ring.
+  // distant backdrop: LOW matte diorama base — the excess land around the
+  // map is gone: only a thin, dark apron carries the island outward (and
+  // the exit river out of frame); the mountain continuation behind the
+  // reservoir still blends out of the north-west rim.
   const ringH = (x: number, z: number): number =>
-    3.4 + 6.5 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
-     + 2.2 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
+    2.3 + 2.6 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
+     + 1.0 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
 
   const farH = (x: number, z: number): number => {
     const [s, t] = xz2st(x, z);
@@ -1672,13 +1675,17 @@ export function buildFarTerrain(): { group: THREE.Group } {
       const sx = (farH(x + e, z) - farH(x - e, z)) / (2 * e);
       const sz = (farH(x, z + e) - farH(x, z - e)) / (2 * e);
       terrainColor(x, z, y, Math.sqrt(sx * sx + sz * sz), tc);
-      // keep the outer plain subdued: a touch of aerial haze so the base
-      // reads as quiet ground, not a competing landscape
+      // push the outer apron hard toward a quiet dark matte so it reads as
+      // the diorama base, never as competing landscape (the exit-valley
+      // continuation keeps a little more of its own tone so the river
+      // visibly runs out of frame)
+      const [fs, ft] = xz2st(x, z);
+      const exitValley = fs > 205 && Math.abs(ft) < 40 ? 1 : 0;
       const gr = (tc.r + tc.g + tc.b) / 3;
-      const mu = 0.14;
-      tc.r = tc.r * (1 - mu) + (gr * 0.78 + 0.1) * mu;
-      tc.g = tc.g * (1 - mu) + (gr * 0.86 + 0.12) * mu;
-      tc.b = tc.b * (1 - mu) + (gr * 0.84 + 0.14) * mu;
+      const mu = 0.72 - 0.42 * exitValley;
+      tc.r = tc.r * (1 - mu) + (gr * 0.34 + 0.04) * mu;
+      tc.g = tc.g * (1 - mu) + (gr * 0.42 + 0.05) * mu;
+      tc.b = tc.b * (1 - mu) + (gr * 0.38 + 0.046) * mu;
       col.setRGB(tc.r, tc.g, tc.b, THREE.SRGBColorSpace);
       colors[i * 3] = col.r;
       colors[i * 3 + 1] = col.g;

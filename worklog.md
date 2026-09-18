@@ -818,3 +818,22 @@ Work Log:
 Stage Summary:
 - Map now reads tight: diagonal valley + mountain-bounded reservoir behind the 45-deg dam, low green flanks, dark matte base shelf corners, water idling well below crest
 - READ-ONLY respected: engine.ts untouched; sim/drive/camera/UI logic untouched (only defaults RES_LEVEL + levelFrac + liveFrac + prop placement)
+
+---
+Task ID: fix-leak-pool-1
+Agent: main (Super Z)
+Task: Fix user-reported screenshot issues: detached water pool outside valley (bottom-right), excess land (green far plain + wide flanks), water flooding whole floodplain at rest, mountains behind dam too weak / reservoir pocket too small, NE abutment bare brown, tan highway streak on rim mountainside
+
+Work Log:
+- ROOT CAUSE 1 (floodplain flooded at rest): glsl.ts ETA_FRAG drive test `wx < uResMaxX (39.6)` is a WORLD-X straight line; on the 45-deg diagonal map it also captured a wedge of the DOWNSTREAM valley at the toe (cells s>61, x<39.6, bed 11.8 < drive target) -> solver piled a reservoir-level lake against the downstream toe -> sheet flooded the whole floodplain (the "water flows out anyway" bug + the user's screenshot). FIX: region test now uses the rotated frame s = (uv.x*LX + uv.y*LZ)*SC < DAM_S-0.6, with SC/DAM_S injected from terrain.ts template constants. Pure geometric binding fix; drive body, fluxes, boundaries untouched (engine.ts NOT touched)
+- ROOT CAUSE 2 (detached pool): terrain.ts excess-land cut flattened everything beyond the flank walls (s>92, dt 13->34) to a 3.1 m shelf -> flood topped the low walls (exp(-dt/16), 7+rangeEnv) and ponded on the shelf against the domain edge = the detached blue blob. FIX: cut DELETED; flank walls rebuilt watertight: (1-exp(-dt/11))*(15+rangeEnv)*rough + monotonic outer climb sstep(wv*0.8, wv+30, dt)*13*rough -> no shelf/trough/pocket outside the corridor anywhere
+- Excess land: valley half-widths narrowed WN 38/58 -> 36/46, WS 14/52 -> 12/40 (exit terms widened 10/7 -> 12/8 so the flood drains); east rim 13 -> 10 with wider carve sstep(9,22); world.ts buildFarTerrain ringH 3.4+6.5fbm+2.2fbm -> 2.3+2.6fbm+1.0fbm and matte mute mu 0.14 -> 0.72 (exit-valley continuation exempted) -> far apron reads as dark diorama base, not green plain
+- Mountains behind dam: west massif boosted 32 -> 36 m and made NARROWER (fade x 7..30 -> 4..16) so the reservoir pocket keeps a broad lake between massif foot and dam; north rim 12+26 -> 14+28, lakeSide band widened x 30..48 -> 28..62; NE abutment softened 26 m/width 3 -> 22 m/width 4.5 (stays scrub/forest clothed, not bare scree)
+- world.ts layout shifts for narrower WS: highway REROUTED off the rim (north approach [86,84]..[106,34] rim climb DELETED -> bench stub [98,24],[106,20],[112,17]; south approach ends [138,-40] on the SW bench - kills the tan streak on the mountainside); cross streets t -48 -> -44; SW farm lane t -44 -> -38; SW districts t0 -46/-48 -> -42/-45; SW farms + CLEAR_RECTS + FARMS t -44/-42 -> -40/-38; substation STP(140,-48) -> (140,-42); its pylons re-anchored
+- terrainColor farmZone SW belt t -50..-38 -> -46..-34 to match
+- Verified via agent-browser (fresh loads, zero console errors): rest state = dry floodplain + thin river ribbon + full diagonal reservoir behind dam; Dam break at 8x = breach pours through gap, flood stays INSIDE the green corridor, NO detached pools, drains toward the bottom-right corner exit, reservoir drains; Reset restores baseline; tsc --noEmit clean
+
+Stage Summary:
+- The "water flows out anyway" bug was the drive-region/rotated-map mismatch (fixed in glsl.ts, 1 test, no physics); the detached pool was the excess-land shelf ponding (fixed by watertight monotonic corridor walls + cut removal)
+- Map now: tight diagonal corridor (green sealed walls), mountain-bounded reservoir behind the 45-deg dam, dry floodplain with town/farms/industry at rest, dark matte base beyond the canvas
+- glsl.ts is the ONLY sim-file touch: a 2-line geometric region test swap (wx<sRot), documented here; engine.ts/cameras/state machine/UI/data flow untouched

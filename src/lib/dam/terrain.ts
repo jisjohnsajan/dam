@@ -113,11 +113,12 @@ function valleyMid(s: number): number {
 // Valley half-widths (asymmetric: the north-east bench — where the village,
 // industry and agricultural land stand — is broader than the south-west one),
 // confined gorge at the toe, opening floodplain, narrowing exit corner.
+// Kept TIGHT so the diorama holds only the land the map actually needs.
 function valleyWN(s: number): number {
-  return Math.min(38 + 0.40 * (s - 70), 58, 10 + 1.5 * (226 - s));
+  return Math.min(36 + 0.38 * (s - 70), 46, 12 + 1.7 * (226 - s));
 }
 function valleyWS(s: number): number {
-  return Math.min(14 + 0.55 * (s - 70), 52, 7 + 1.5 * (226 - s));
+  return Math.min(12 + 0.48 * (s - 70), 40, 8 + 1.7 * (226 - s));
 }
 
 // ---------------------------------------------------------------- value noise
@@ -178,22 +179,24 @@ export function bedAt(x: number, z: number): number {
     if (dtn > 0) floor += (1 - Math.exp(-dtn / 9)) * 22 * rough;
 
     // west-shore massif — the mountains BEHIND the dam that hold the
-    // reservoir: full height against the west edge, easing inland, with a
-    // flooded inflow gorge cut at z ≈ 0 (the engine injects river inflow
-    // there). Crest heights stay well above the max scenario drive (24.4 m)
-    // so the basin never overtops its mountain walls.
-    const westAmp = 32 * sstep(30, 7, x);
+    // reservoir: full height against the west edge, easing inland quickly so
+    // the corner lake keeps a broad pocket between the massif foot and the
+    // dam, with a flooded inflow gorge cut at z ≈ 0 (the engine injects river
+    // inflow there). Crest heights stay well above the max scenario drive
+    // (24.4 m) so the basin never overtops its mountain walls.
+    const westAmp = 36 * sstep(16, 4, x);
     const gorge = sstep(4.5, 10, Math.abs(z));
     floor += westAmp * gorge * rough;
   }
 
   // ---- NE abutment massif (downstream of the dam's NE end) ----------------
-  // rises steeply within ~3 m of the dam end so the reservoir is sealed,
-  // then fades out into the valley's north-east wall
+  // rises steeply within ~4.5 m of the dam end so the reservoir is sealed,
+  // then fades out into the valley's north-east wall (kept broad enough to
+  // stay clothed in scrub/forest rather than bare scree)
   if (s > DAM_S - 0.5 && t > T_DAM1) {
     const steep = 1 - sstep(DAM_S + 14, DAM_S + 30, s);
-    const amp = 26 * steep;
-    const width = 3 * steep + 11 * (1 - steep);
+    const amp = 22 * steep;
+    const width = 4.5 * steep + 14 * (1 - steep);
     floor += (1 - Math.exp(-(t - T_DAM1) / width)) * amp * rough;
   }
 
@@ -203,18 +206,23 @@ export function bedAt(x: number, z: number): number {
   }
 
   // ---- downstream valley walls + flank ranges -----------------------------
+  // WATERTIGHT CORRIDOR: the flank walls rise steeply from the floodplain and
+  // then climb MONOTONICALLY into the canvas rims. There is no flat shelf,
+  // trough or pocket anywhere outside the valley, so even the peak flood
+  // stage can never escape the corridor and pond somewhere it shouldn't.
   if (s >= DAM_TOE_S - 4) {
     const mid = valleyMid(s);
     const wv = t > mid ? valleyWN(s) : valleyWS(s);
     const dt = Math.abs(t - mid) - wv;
     if (dt > 0) {
-      // low green hills flanking the floodplain — kept modest so the map
-      // reads tight; the towering relief lives behind the dam only
+      // rounded green hills flanking the floodplain — the towering relief
+      // lives behind the dam only
       const rangeEnv =
         sstep(78, 100, s) * (1 - sstep(190, 224, s)) * 5 +
         2 * sstep(150, 200, s);
-      const wall = (1 - Math.exp(-dt / 16)) * (7 + rangeEnv) * rough;
-      floor += wall;
+      const wall = (1 - Math.exp(-dt / 11)) * (15 + rangeEnv) * rough;
+      const climb = sstep(wv * 0.8, wv + 30, dt) * 13 * rough;
+      floor += wall + climb;
       floor += sstep(24, 66, dt) * rangeEnv * 0.4 * rough;
     }
   }
@@ -223,8 +231,8 @@ export function bedAt(x: number, z: number): number {
   // north rim — mountain wall behind the reservoir (full over the lake
   // reach), easing to a modest canvas frame downstream
   if (z < -76) {
-    const lakeSide = 1 - sstep(30, 48, x);
-    floor += (1 - Math.exp(-(-76 - z) / 9)) * (12 + 26 * lakeSide) * rough;
+    const lakeSide = 1 - sstep(28, 62, x);
+    floor += (1 - Math.exp(-(-76 - z) / 9)) * (14 + 28 * lakeSide) * rough;
   }
   // south rim — lowest, so the aerial camera sees over it
   if (z > 72) {
@@ -234,21 +242,11 @@ export function bedAt(x: number, z: number): number {
   if (x < 3 && z > 10) {
     floor += (1 - Math.exp(-(3 - x) / 9)) * 8 * rough * sstep(10, 26, z);
   }
-  // east rim with the river exit gorge carved through at t ≈ 0
+  // east rim with the river exit gorge carved through at t ≈ 0 — the gorge
+  // is kept wide and deep so the flood visibly drains toward the corner
   if (x > 153) {
-    const carve = sstep(5.5, 14, Math.abs(t - axisT(226)));
-    floor += (1 - Math.exp(-(x - 153) / 14)) * 13 * rough * (0.12 + 0.88 * carve);
-  }
-
-  // ---- excess-land cut ------------------------------------------------------
-  // far canvas corners beyond the valley margins drop away to a low matte
-  // base shelf — the map keeps only the land it needs (the flood exits
-  // through the corner gorge, so wide flanks are dead weight)
-  if (s > 92) {
-    const midC = valleyMid(s);
-    const wvC = t > midC ? valleyWN(s) : valleyWS(s);
-    const dtC = Math.abs(t - midC) - wvC;
-    floor -= sstep(92, 116, s) * sstep(13, 34, dtC) * (floor - 3.1);
+    const carve = sstep(9, 22, Math.abs(t - axisT(226)));
+    floor += (1 - Math.exp(-(x - 153) / 14)) * 10 * rough * (0.1 + 0.9 * carve);
   }
 
   // rockiness — kept subtle on the walls so the slopes read as smooth turf
@@ -469,7 +467,7 @@ export function terrainColor(
   // LAND), the south-west bench, and fields east of the lower floodplain
   const farmZone =
     zoneFallST(s, t, 84, 4, 132, 36, 8) * 0.85 +
-    zoneFallST(s, t, 102, -50, 140, -38, 7) * 0.8 +
+    zoneFallST(s, t, 102, -46, 140, -34, 7) * 0.8 +
     zoneFallST(s, t, 140, -44, 176, -8, 7) * 0.7;
   const farm = Math.min(farmZone, 1) * sstep(16, 8, b) * sstep(0.7, 0.2, slope) * (0.4 + 0.6 * n2);
   r = r * (1 - farm) + (0.36 + 0.04 * n) * farm;
