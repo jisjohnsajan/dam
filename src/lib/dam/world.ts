@@ -371,10 +371,13 @@ export function buildPowerhouse(): PowerhouseProps {
 interface StreetSeg { pts: [number, number][]; w: number }
 
 // Square-canvas street network: riverside drive hugging the channel's south
-// bank, a city grid across the plain, north-bench service road, farm tracks.
+// bank (a CONSTANT +12.5 m offset from the drifting axis, so it never dips
+// into the incised channel), a city grid across the plain, north-bench service
+// road, farm tracks.
 const TOWN_STREETS: StreetSeg[] = [
-  // riverside drive (south bank of the river, follows the axis drift)
-  { pts: [[52, -34], [64, -33.6], [76, -33], [88, -32.4], [100, -31.8], [112, -31.2], [124, -30.6], [136, -30.2], [150, -29.8]], w: 3.2 },
+  // riverside drive (south bank of the river, tracks the axis drift;
+  // merges into the first east-west avenue at its east end)
+  { pts: [[52, -32.5], [64, -32.0], [76, -30.3], [88, -27.8], [100, -24.8], [112, -21.7], [124, -18.9], [134, -17.2]], w: 3.2 },
   // north-bench service road (between channel and north rim)
   { pts: [[56, -58], [70, -58.6], [84, -59], [98, -59.2], [112, -59.4], [126, -59.4], [140, -59], [152, -58.4]], w: 2.8 },
   // city grid — east-west avenues
@@ -454,6 +457,8 @@ const CLEAR_RECTS: [number, number, number, number][] = [
   // civic landmark complexes (hospital / school / factory / waterworks / fuel)
   [122, 10, 15, 11], [84, 12, 13, 11], [104, 35, 21, 12], [62, -34, 11, 10],
   [140, 18, 9, 8], [134, -4, 10, 8], [126, 26, 9, 8],
+  // industrial estate warehouses (south-east civic band)
+  [118, 37, 13, 8], [129, 38.5, 13, 8], [140, 33, 13, 8],
   // landmark towers
   [94, -12, 7, 7], [128, 0, 7, 7], [140, 26, 7, 7], [88, 8, 7, 7], [132, -12, 7, 7],
 ];
@@ -734,7 +739,7 @@ export interface RubbleField {
 
 export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; floodTrees: FloodTrees; rubble: RubbleField } {
   const group = new THREE.Group();
-  const asphalt = new THREE.MeshStandardMaterial({ color: 0x45454a, roughness: 0.95 });
+  const asphalt = new THREE.MeshStandardMaterial({ color: 0x8d8a82, roughness: 0.95 });
   const paving = new THREE.MeshStandardMaterial({ color: 0x9b968c, roughness: 0.95 });
 
   // city street grid + riverside drive + farm lanes
@@ -768,7 +773,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
       group.add(pier);
     }
     // approach fills
-    flatRibbon(group, [[124, -26], [124, -30.2]], 3.0, asphalt);
+    flatRibbon(group, [[124, -26], [124, -18.9]], 3.0, asphalt);
     flatRibbon(group, [[124, -55.6], [124, -58.6]], 3.0, asphalt);
   }
 
@@ -793,6 +798,9 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     { x0: 102, z0: 17, x1: 146, z1: 31, mix: 'low' },
     { x0: 114, z0: 34, x1: 148, z1: 45, mix: 'village' },
     { x0: 8, z0: 0, x1: 44, z1: 42, mix: 'village' },
+    // riverbank hamlet on the north bench upstream of the city (the reference
+    // VILLAGE — houses strung along the bench road inside the wooded slope)
+    { x0: 60, z0: -66, x1: 92, z1: -54, mix: 'village' },
   ];
   let seed = 1;
   const nextRnd = () => hashRnd(seed++ * 12.9898);
@@ -906,6 +914,12 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     if (g < 2.8 || g > 9.5) continue;
     pushRubble(x + (hashRnd(k * 3.1) - 0.5) * 3, z + (hashRnd(k * 11.9) - 0.5) * 3, g, 0.8 + hashRnd(k * 5.7) * 0.9);
   }
+  // house-spot set for vegetation collision (keeps trees off roofs)
+  const houseSpots = [...spotsL, ...spotsM, ...spotsH];
+  const nearHouse = (x: number, z: number, m = 2.4): boolean => {
+    for (const s of houseSpots) if (Math.abs(s.x - x) < m && Math.abs(s.z - z) < m) return true;
+    return false;
+  };
   const rubbleMesh = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
     new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 }),
@@ -952,6 +966,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
   // ---- city + forest trees (instanced, floodable — engine tilts them in
   // high-velocity flow) — street lines, district groves, riverbank gallery,
   // rim forest belts
+  let floodTrees: FloodTrees;
   {
     const treeSpots: { x: number; z: number; s: number }[] = [];
     // street tree lines along the avenues
@@ -997,16 +1012,36 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
       const az = axisAt(x);
       for (const side of [1, -1]) {
         const z = az + side * (14 + hashRnd(x * side) * 4.5);
+        // keep the gallery out of the north-bench farm plots
+        if (side < 0 && x > 90 && z > -57 && z < -46) continue;
         const g = bedAt(x, z);
         if (g < 3.4 || g > 16) continue;
+        if (nearHouse(x, z)) continue;
         if (hashRnd(x * 3.7 + side * 11) < 0.5) continue;
         treeSpots.push({ x, z, s: 0.95 + hashRnd(x * side * 2) * 0.7 });
       }
     }
+    // north-slope forest — dense woodland on the bench slope between the
+    // expressway and the north rim, wrapping the upstream hamlet (reference
+    // FOREST AREA); the village reads as carved out of the woods
+    for (let x = 52; x <= 114; x += 2.1) {
+      for (let z = -73; z <= -64; z += 2.1) {
+        if (Math.abs(z - axisAt(x)) < 14.5) continue;
+        if (distToPaths(x, z) < 2.5) continue;
+        if (nearHouse(x, z, 3.0)) continue;
+        const g = bedAt(x, z);
+        if (g < 8 || g > 32) continue;
+        const slope = Math.abs(bedAt(x + 2, z) - g) + Math.abs(bedAt(x, z + 2) - g);
+        if (slope > 2.4) continue;
+        const h = hashRnd(x * 9.1 + z * 3.7);
+        if (h < 0.42) continue;
+        treeSpots.push({ x: x + (hashRnd(x + z) - 0.5) * 1.6, z: z + (hashRnd(x * 2 + z) - 0.5) * 1.6, s: 1.1 + h * 0.9 });
+      }
+    }
     // rim forest belts — north rim, west headwall shoulders, east rim,
     // reservoir south shore — dense woodland framing the canvas
-    for (let x = 8; x <= 154; x += 2.6) {
-      for (let z = -78; z <= 78; z += 2.6) {
+    for (let x = 8; x <= 154; x += 2.3) {
+      for (let z = -78; z <= 78; z += 2.3) {
         const rimD = Math.min(x, LX - x, -(z + 74), z - 70);
         const inRim = rimD > -4;
         const westShore = x < 42 && z > -10 && z < 2;
@@ -1018,7 +1053,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
         const slope = Math.abs(bedAt(x + 2, z) - g) + Math.abs(bedAt(x, z + 2) - g);
         if (slope > 2.2) continue;
         const h = hashRnd(x * 12.7 + z * 5.3);
-        if (h < (inRim ? 0.68 : 0.58)) continue;
+        if (h < (inRim ? 0.58 : 0.52)) continue;
         treeSpots.push({ x: x + (hashRnd(x + z) - 0.5) * 1.8, z: z + (hashRnd(x * 2 + z) - 0.5) * 1.8, s: 1.15 + h * 0.9 });
       }
     }
@@ -1046,7 +1081,7 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     fols.castShadow = true;
     if (fols.instanceColor) fols.instanceColor.needsUpdate = true;
     group.add(trunks, fols);
-    var floodTrees: FloodTrees = { trunk: trunks, fol: fols, spots: fSpots, prog: new Float32Array(fSpots.length), drift: new Float32Array(fSpots.length * 2) };
+    floodTrees = { trunk: trunks, fol: fols, spots: fSpots, prog: new Float32Array(fSpots.length), drift: new Float32Array(fSpots.length * 2) };
   }
 
   // ---- landmarks
@@ -1235,6 +1270,9 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
       { x: 18, z: 8, w: 11, d: 8, k: 1 }, { x: 30, z: 16, w: 10, d: 8, k: 2 },
       { x: 20, z: 28, w: 10, d: 8, k: 0 }, { x: 34, z: 34, w: 9, d: 8, k: 1 },
       { x: 146, z: 40, w: 10, d: 8, k: 2 }, // east orchard plot
+      // north-bench patchwork (reference AGRICULTURAL LAND, upper-right)
+      { x: 98, z: -52, w: 10, d: 6, k: 1 }, { x: 114, z: -53, w: 10, d: 6, k: 0 },
+      { x: 130, z: -52, w: 10, d: 6, k: 2 }, { x: 144, z: -51, w: 9, d: 6, k: 1 },
     ];
     const fieldMats = [
       new THREE.MeshStandardMaterial({ map: makeFieldTex('#8a7a3d', '#79692f'), roughness: 0.95 }), // ripe grain
@@ -1477,6 +1515,71 @@ export function buildTown(): { group: THREE.Group; districts: DistrictBldgs[]; f
     }
   }
 
+  // industrial estate — big gable-roof warehouses with loading bays, container
+  // stacks and a shared parking apron (reference INDUSTRIAL AREA, south-east
+  // of the city beside the farm belt)
+  {
+    const roofLight = new THREE.MeshStandardMaterial({ color: 0xd7dade, roughness: 0.65, metalness: 0.12 });
+    const roofBlue = new THREE.MeshStandardMaterial({ color: 0x6d8fa8, roughness: 0.6, metalness: 0.15 });
+    const wallLight = new THREE.MeshStandardMaterial({ color: 0xe3e1da, roughness: 0.85 });
+    const doorMat = new THREE.MeshStandardMaterial({ color: 0x5d6266, roughness: 0.7, metalness: 0.3 });
+    const contTints = [0xb4643c, 0x3f6e52, 0x4a6b8a, 0x9a4438, 0x8a8250];
+    const SHEDS: { x: number; z: number; w: number; d: number; blue: boolean; rot: number }[] = [
+      { x: 118, z: 37, w: 11, d: 5.6, blue: true, rot: 0.05 },
+      { x: 129, z: 38.5, w: 11, d: 5.6, blue: false, rot: -0.04 },
+      { x: 140, z: 33, w: 10, d: 5.2, blue: true, rot: 0.08 },
+    ];
+    for (const s of SHEDS) {
+      const g = bedAt(s.x, s.z);
+      const shed = new THREE.Group();
+      const hall = new THREE.Mesh(new THREE.BoxGeometry(s.w, 3.6, s.d), wallLight);
+      hall.position.y = 1.8;
+      hall.castShadow = hall.receiveShadow = true;
+      shed.add(hall);
+      // gable roof pair
+      const rMat = s.blue ? roofBlue : roofLight;
+      const half = s.d / 2 + 0.35;
+      for (const side of [-1, 1]) {
+        const slab = new THREE.Mesh(new THREE.BoxGeometry(s.w + 0.6, 0.14, Math.hypot(half, 1.7)), rMat);
+        slab.position.set(0, 4.35, side * half * 0.5);
+        slab.rotation.x = side * -0.55;
+        slab.castShadow = true;
+        shed.add(slab);
+      }
+      // loading bay doors on the north face
+      for (let k = 0; k < 3; k++) {
+        const door = new THREE.Mesh(new THREE.BoxGeometry(1.7, 2.1, 0.1), doorMat);
+        door.position.set(-s.w * 0.3 + k * s.w * 0.3, 1.05, -s.d / 2 - 0.04);
+        shed.add(door);
+      }
+      shed.position.set(s.x, g, s.z);
+      shed.rotation.y = s.rot;
+      group.add(shed);
+      // apron + containers on the north side
+      const apron = new THREE.Mesh(new THREE.PlaneGeometry(s.w + 3, 4.6), paving);
+      apron.rotation.x = -Math.PI / 2;
+      apron.position.set(s.x, g + 0.1, s.z - s.d / 2 - 2.6);
+      apron.receiveShadow = true;
+      group.add(apron);
+      const nC = 2 + Math.floor(hashRnd(s.x * 3.3) * 3);
+      for (let k = 0; k < nC; k++) {
+        const cx2 = s.x - s.w * 0.35 + k * 2.5 + hashRnd(s.x + k) * 0.8;
+        const cz2 = s.z - s.d / 2 - 2.2 - hashRnd(s.z * 2 + k) * 1.2;
+        const stack = 1 + Math.floor(hashRnd(s.x * 7 + k * 3) * 2.4);
+        for (let m = 0; m < stack; m++) {
+          const cont = new THREE.Mesh(
+            new THREE.BoxGeometry(2.2, 0.85, 1.0),
+            new THREE.MeshStandardMaterial({ color: contTints[Math.floor(hashRnd(s.z + k * 5 + m) * contTints.length)], roughness: 0.8, metalness: 0.1 }),
+          );
+          cont.position.set(cx2, bedAt(cx2, cz2) + 0.45 + m * 0.88, cz2);
+          cont.rotation.y = (hashRnd(cx2 * 3 + m) - 0.5) * 0.2;
+          cont.castShadow = true;
+          group.add(cont);
+        }
+      }
+    }
+  }
+
   return { group, districts, floodTrees, rubble };
 }
 
@@ -1495,11 +1598,11 @@ export function buildFarTerrain(): { group: THREE.Group } {
     return t * t * (3 - 2 * t);
   };
 
-  // distant backdrop: LOW rolling hills — kept subtle so the square canvas
-  // (dam, river, city, farms) owns the view instead of a wall of green
+  // distant backdrop: forested mountain ring — tall enough to frame the
+  // valley like the reference map (green wooded slopes, tan high tops)
   const ringH = (x: number, z: number): number =>
-    9 + 9 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
-     + 3 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
+    12 + 14 * fbm(x * 0.021 + 40.7, z * 0.021 - 13.3, 4)
+     + 3.5 * fbm(x * 0.065 - 8.1, z * 0.065 + 21.4, 3);
 
   const farH = (x: number, z: number): number => {
     // east corridor: bedAt stays well-behaved east of the canvas, so the
@@ -1537,13 +1640,13 @@ export function buildFarTerrain(): { group: THREE.Group } {
       const sx = (farH(x + e, z) - farH(x - e, z)) / (2 * e);
       const sz = (farH(x, z + e) - farH(x, z - e)) / (2 * e);
       terrainColor(x, z, y, Math.sqrt(sx * sx + sz * sz), tc);
-      // mute toward hazy sage-grey: the backdrop reads as distance,
-      // not a second green mountain world competing with the valley
+      // keep the far ring lush: only a whisper of aerial haze so the backdrop
+      // reads as forested mountains, not a grey wall
       const gr = (tc.r + tc.g + tc.b) / 3;
-      const mu = 0.45;
-      tc.r = tc.r * (1 - mu) + (gr * 0.78 + 0.13) * mu;
-      tc.g = tc.g * (1 - mu) + (gr * 0.86 + 0.15) * mu;
-      tc.b = tc.b * (1 - mu) + (gr * 0.84 + 0.17) * mu;
+      const mu = 0.14;
+      tc.r = tc.r * (1 - mu) + (gr * 0.78 + 0.1) * mu;
+      tc.g = tc.g * (1 - mu) + (gr * 0.86 + 0.12) * mu;
+      tc.b = tc.b * (1 - mu) + (gr * 0.84 + 0.14) * mu;
       col.setRGB(tc.r, tc.g, tc.b, THREE.SRGBColorSpace);
       colors[i * 3] = col.r;
       colors[i * 3 + 1] = col.g;

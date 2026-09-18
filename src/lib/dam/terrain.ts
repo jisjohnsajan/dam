@@ -359,29 +359,29 @@ export function terrainColor(
   let g = 0.29 + 0.058 * n + 0.026 * strata;
   let bl = 0.246 + 0.045 * n + 0.018 * strata;
 
-  // lush grass on gentle terrain (tropical valley floor + benches) — the band
-  // reaches further up the lower slopes so the valley reads as green, not raw
+  // lush grass on gentle terrain (tropical valley floor + benches) — vivid
+  // yellow-green meadow like a sunlit satellite valley, brighter on the flats
   const grass = smoothstep(0.55, 0.12, slope) * smoothstep(42, 14, b) * (0.5 + 0.5 * n2);
-  r = r * (1 - grass) + (0.16 + 0.05 * n2) * grass;
-  g = g * (1 - grass) + (0.30 + 0.08 * n2) * grass;
-  bl = bl * (1 - grass) + (0.115 + 0.03 * n2) * grass;
+  r = r * (1 - grass) + (0.26 + 0.07 * n2) * grass;
+  g = g * (1 - grass) + (0.44 + 0.09 * n2) * grass;
+  bl = bl * (1 - grass) + (0.17 + 0.04 * n2) * grass;
 
   // scrub vegetation clothing the slopes — every hill/rim in the square canvas
   // reads as green and rounded; bare rock only shows on steep faces
   const scrub = smoothstep(1.5, 0.35, slope) * smoothstep(135, 20, b) * (0.3 + 0.7 * n);
-  const sv = scrub * 0.9;
-  r = r * (1 - sv) + (0.21 + 0.04 * n2) * sv;
-  g = g * (1 - sv) + (0.285 + 0.05 * n2) * sv;
-  bl = bl * (1 - sv) + (0.15 + 0.03 * n2) * sv;
+  const sv = scrub * 0.95;
+  r = r * (1 - sv) + (0.20 + 0.05 * n2) * sv;
+  g = g * (1 - sv) + (0.33 + 0.06 * n2) * sv;
+  bl = bl * (1 - sv) + (0.145 + 0.035 * n2) * sv;
 
   // forest floor — darker, richer green on the rim slopes and around the
   // reservoir so the canvas edges read as wooded hills framing the valley
   const rimD = Math.min(x, LX - x, z + LZ / 2, LZ / 2 - z);
-  const forest = Math.max(smoothstep(1.35, 0.3, slope), smoothstep(34, 18, rimD) * 0.85)
+  const forest = Math.max(smoothstep(1.35, 0.3, slope), smoothstep(34, 18, rimD) * 0.9)
     * smoothstep(100, 18, b) * (0.6 + 0.4 * n);
-  r = r * (1 - forest) + (0.125 + 0.03 * n2) * forest;
-  g = g * (1 - forest) + (0.235 + 0.05 * n2) * forest;
-  bl = bl * (1 - forest) + (0.115 + 0.025 * n2) * forest;
+  r = r * (1 - forest) + (0.11 + 0.035 * n2) * forest;
+  g = g * (1 - forest) + (0.24 + 0.055 * n2) * forest;
+  bl = bl * (1 - forest) + (0.115 + 0.03 * n2) * forest;
 
   // urban ground — the city plain (centre/east of the canvas) gets a warm
   // pavement/park blend so streets and districts sit on visibly developed land
@@ -393,7 +393,8 @@ export function terrainColor(
 
   // farmland belts — south of the city + the SW quadrant, subtle warm strips
   const farmZone =
-    zoneFall(x, z, 48, 44, 152, 68, 7) * 0.8 + zoneFall(x, z, 6, -4, 44, 40, 8) * 0.7;
+    zoneFall(x, z, 48, 44, 152, 68, 7) * 0.8 + zoneFall(x, z, 6, -4, 44, 40, 8) * 0.7 +
+    zoneFall(x, z, 90, -57, 150, -46, 7) * 0.75;
   const farm = Math.min(farmZone, 1) * smoothstep(16, 9, b) * smoothstep(0.7, 0.2, slope) * (0.4 + 0.6 * n2);
   r = r * (1 - farm) + (0.36 + 0.04 * n) * farm;
   g = g * (1 - farm) + (0.33 + 0.03 * n) * farm;
@@ -404,9 +405,9 @@ export function terrainColor(
   const dzo = z - axisAt(x);
   const sand = smoothstep(0.6, 1.8, 1.8 - slope) * smoothstep(10.8, 9.2, b)
     * (x > DAM_X - 4 ? 1 : 0) * smoothstep(16, 9, Math.abs(dzo));
-  r = r * (1 - sand) + 0.47 * sand;
-  g = g * (1 - sand) + 0.41 * sand;
-  bl = bl * (1 - sand) + 0.30 * sand;
+  r = r * (1 - sand) + 0.52 * sand;
+  g = g * (1 - sand) + 0.46 * sand;
+  bl = bl * (1 - sand) + 0.33 * sand;
 
   // dark wet sediment under the reservoir + drawdown stain ring
   if (x < DAM_X && b < RES_LEVEL + 0.7) {
@@ -418,11 +419,11 @@ export function terrainColor(
 
   // sun-bleached rock only on the very top of the tallest rim massifs — every
   // mid slope stays clothed in scrub/forest
-  const high = smoothstep(66, 96, b);
+  const high = smoothstep(60, 92, b);
   const band = 0.5 + 0.5 * Math.sin(b * 0.55 + n2 * 4.2); // large rock strata
-  r = r * (1 - high) + (0.265 + 0.058 * band + 0.026 * n) * high;
-  g = g * (1 - high) + (0.248 + 0.046 * band + 0.022 * n) * high;
-  bl = bl * (1 - high) + (0.226 + 0.036 * band + 0.018 * n) * high;
+  r = r * (1 - high) + (0.42 + 0.07 * band + 0.03 * n) * high;
+  g = g * (1 - high) + (0.33 + 0.055 * band + 0.025 * n) * high;
+  bl = bl * (1 - high) + (0.235 + 0.04 * band + 0.02 * n) * high;
 
   out.r = clamp01(r);
   out.g = clamp01(g);

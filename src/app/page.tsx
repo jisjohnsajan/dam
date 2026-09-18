@@ -11,7 +11,7 @@ import {
   GaugesPanel, TimelineBar, TABS, SensorNetworkPanel, type ScenarioForm, type TabId, type UIStats, type TelemetryView,
 } from '@/components/damsafe/panels';
 import { Minimap } from '@/components/damsafe/minimap';
-import { Panel, GradientLegend } from '@/components/damsafe/ui';
+import { Panel, GradientLegend, MapLegend } from '@/components/damsafe/ui';
 import { AlertTriangle, ChevronLeft, ChevronRight, SlidersHorizontal, Zap, Waves, Droplets, DoorOpen, CloudRain, RotateCcw } from 'lucide-react';
 import {
   computeRisk, computeForecast, computeImpact, computeEvac, computeValidation,
@@ -73,6 +73,7 @@ export default function Page() {
   const [sound, setSound] = useState(false);
   const [timeScale, setTimeScale] = useState(1);
   const [paused, setPaused] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
   const [cinematic, setCinematic] = useState(false);
 
   const [risk, setRisk] = useState<RiskResult | null>(null);
@@ -572,6 +573,13 @@ export default function Page() {
             stops={['#29bf4d', '#a6d126', '#fab819', '#e54019', '#85198c']}
             labels={['15m', '1h', '4h+']}
           />
+        </div>
+      )}
+
+      {/* map legend — reference-style key, bottom-right above the timeline */}
+      {!cinematic && (
+        <div className="absolute bottom-[146px] right-2 z-20 hidden md:block">
+          <MapLegend open={legendOpen} onToggle={() => setLegendOpen((v) => !v)} />
         </div>
       )}
 

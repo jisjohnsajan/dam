@@ -143,3 +143,57 @@ export function GradientLegend({
     </div>
   );
 }
+
+// ------------------------------------------------------------------ map legend
+// Compact collapsible map key mirroring the reference satellite-diorama
+// legend: water bodies, infrastructure, land-cover classes + flow direction.
+export function MapLegend({
+  open,
+  onToggle,
+}: {
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const items: { c: string; ring?: boolean; label: string }[] = [
+    { c: '#2e6f9e', label: 'Water (Reservoir / River)' },
+    { c: '#4fb3d9', label: 'Flood Water' },
+    { c: '#8d8a82', label: 'Roads / Highway' },
+    { c: '#d9cdb4', label: 'Buildings' },
+    { c: '#2c5e31', label: 'Forest' },
+    { c: '#8a9a4a', label: 'Agriculture' },
+    { c: '#a88b5f', label: 'Terrain (Hills / Mountains)' },
+  ];
+  return (
+    <div className="pointer-events-auto rounded-lg border border-white/10 bg-[#0a1526]/90 text-[10px] text-slate-300 shadow-xl backdrop-blur-md">
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-6 px-3 py-2 tracking-[0.14em] text-cyan-200/80 hover:bg-white/[0.04]"
+      >
+        <span className="font-semibold">MAP LEGEND</span>
+        <span className="font-mono text-slate-500">{open ? '–' : '+'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-white/5 px-3 py-2">
+          <div className="space-y-[5px]">
+            {items.map((it) => (
+              <div key={it.label} className="flex items-center gap-2">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-[2px] border border-white/25"
+                  style={{ background: it.c }}
+                />
+                <span>{it.label}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center gap-2 border-t border-white/5 pt-2 text-cyan-300/90">
+            <svg width="26" height="8" viewBox="0 0 26 8" fill="none">
+              <path d="M0 4 H20" stroke="currentColor" strokeWidth="1.6" />
+              <path d="M19 1 L25 4 L19 7 Z" fill="currentColor" />
+            </svg>
+            <span>FLOW: DAM &#8594; RIVER &#8594; CITY &#8594; DOWNSTREAM</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

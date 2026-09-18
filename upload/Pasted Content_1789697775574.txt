@@ -1,0 +1,2431 @@
+You are an expert senior 3D graphics engineer, GIS visualization engineer,
+hydrodynamic simulation visualization engineer, game-environment artist,
+real-time rendering engineer, and disaster-management digital-twin designer.
+
+You are working on an SIH project based on:
+
+"Dam Break / Dam Inundation Modelling Using Hydrodynamic Modelling of a River"
+
+The application is intended to demonstrate the real-world danger of dam
+failure and downstream inundation through an interactive 3D simulation.
+
+I already have a working application.
+
+YOUR JOB IS TO COMPLETELY REDESIGN AND POLISH THE 3D ENVIRONMENT,
+SIMULATION VISUALIZATION, DAM-BREAK VISUAL EXPERIENCE, AND SIMULATION
+PLAYBACK EXPERIENCE.
+
+DO NOT REBUILD THE ENTIRE APPLICATION.
+
+DO NOT THROW AWAY WORKING SYSTEMS.
+
+The existing simulation and hardware systems are valuable and must remain
+functional.
+
+The primary problem is the current 3D environment.
+
+The current environment looks like a generic procedural terrain demo:
+large gray mountains, tiny reservoir, tiny dam, tiny city, almost no
+infrastructure, and very little visual indication of the actual disaster.
+
+That must be completely redesigned.
+
+============================================================
+1. ABSOLUTE RULE — PRESERVE EXISTING FUNCTIONALITY
+============================================================
+
+Before changing anything, inspect the entire project.
+
+Understand:
+
+- Existing frontend
+- Existing backend
+- Existing 3D engine
+- Existing terrain system
+- Existing water system
+- Existing simulation engine
+- Existing state management
+- Existing ESP32 integration
+- Existing camera system
+- Existing simulation controls
+- Existing API/data flow
+- Existing simulation timestep
+- Existing testing system
+
+The following systems are already working and MUST NOT be removed,
+renamed, replaced, or broken:
+
+- ESP32 integration
+- Hardware integration
+- Sensor integration
+- Simulation states
+- NORMAL state
+- TESTING states
+- DAM BREAK state
+- SPILL state
+- RAIN state
+- STORM state
+- Existing simulation controls
+- Existing camera system
+- Existing camera views
+- Existing camera switching
+- Existing backend communication
+- Existing API communication
+- Existing hydrodynamic calculations
+- Existing flood calculations
+- Existing water-level calculations
+- Existing state machine
+- Existing event handling
+- Existing data pipeline
+- Existing UI functionality
+
+Treat these systems as authoritative.
+
+You may improve how their output is VISUALIZED.
+
+You may create adapters between the existing simulation and the new
+3D visualization layer.
+
+You must NOT replace the underlying engineering/simulation logic merely
+to make the visuals easier.
+
+============================================================
+2. PRIMARY DESIGN PHILOSOPHY
+============================================================
+
+The current environment is:
+
+"terrain with some water"
+
+The new environment must become:
+
+"an interactive dam-break inundation digital twin"
+
+Think of the result as:
+
+GIS DIGITAL TWIN
++
+HYDRODYNAMIC FLOOD SIMULATION
++
+OPEN-WORLD GAME ENVIRONMENT
++
+DISASTER VISUALIZATION SYSTEM
+
+The 3D world should feel like a small, dense, believable open-world
+river basin.
+
+It does NOT need to be enormous.
+
+It needs to be spatially rich.
+
+The viewer must immediately understand:
+
+DAM
+↓
+RESERVOIR
+↓
+RIVER
+↓
+DOWNSTREAM VALLEY
+↓
+TOWN / CITY
+↓
+INFRASTRUCTURE
+↓
+FLOODPLAIN
+↓
+INUNDATION
+
+The environment is the storyteller.
+
+The simulation data is the authority.
+
+============================================================
+3. CURRENT VISUAL PROBLEM
+============================================================
+
+The current environment has:
+
+- Giant random mountains
+- Gray/blurry terrain
+- Tiny reservoir
+- Tiny dam
+- Tiny civilization
+- Almost no roads
+- Almost no infrastructure
+- Almost no trees
+- Almost no agriculture
+- No convincing floodplain
+- No meaningful city
+- Poor spatial hierarchy
+- Mountains occupying too much of the screen
+- Important simulation objects being visually insignificant
+
+DO NOT simply add a few buildings to this scene.
+
+PERFORM A GENUINE ENVIRONMENT REDESIGN.
+
+The current terrain composition should effectively be replaced.
+
+============================================================
+4. NEW WORLD COMPOSITION
+============================================================
+
+Create a large river basin / valley.
+
+General spatial structure:
+
+                MOUNTAINS
+        ┌────────────────────────┐
+        │       RESERVOIR        │
+        │    ~~~~~~~~~~~~~~~~     │
+        │    ~~~~~~~~~~~~~~~~     │
+        │             DAM         │
+        │              █████      │
+        └───────────────█─────────┘
+                        ↓
+                   RIVER VALLEY
+                        ↓
+              FOREST / HILLS
+                        ↓
+              AGRICULTURAL AREA
+                        ↓
+               LARGE SETTLEMENT
+            ┌─────────────────────┐
+            │ 🏠 🏠 🏠  🏢       │
+            │ 🏠 🏠 🏠  🏭       │
+            │                     │
+            │ ===== HIGHWAY ===== │
+            │         BRIDGE      │
+            │           ║         │
+            │ 🏠 🏠 🏠 ║ 🏠 🏠   │
+            └───────────║─────────┘
+                        ↓
+                  FLOODPLAIN
+                        ↓
+                    DOWNSTREAM
+
+The dam should be positioned toward the upper-left / upper portion of
+the world.
+
+The reservoir should be behind it.
+
+The downstream populated region should occupy a much larger portion of
+the world.
+
+The flood must have a meaningful geographic path.
+
+============================================================
+5. TERRAIN REDESIGN
+============================================================
+
+Do NOT generate giant random blobs of mountains.
+
+Terrain must have geographic logic.
+
+Create:
+
+- Mountain ranges
+- Reservoir basin
+- Dam gorge
+- Downstream valley
+- River channel
+- Floodplain
+- Rolling hills
+- Forest areas
+- Agricultural areas
+- Urban terrain
+- Natural drainage paths
+- Riverbanks
+
+The elevation gradient must make sense.
+
+Water must naturally be able to travel:
+
+RESERVOIR
+→ DAM
+→ VALLEY
+→ RIVER
+→ FLOODPLAIN
+→ SETTLEMENT
+→ DOWNSTREAM
+
+Avoid:
+
+- Random noise terrain
+- Huge foreground mountains
+- Mountains blocking the city
+- Impossible cliffs everywhere
+- Floating terrain
+- Completely gray terrain
+- Terrain that does not influence water flow
+
+Mountains should FRAME the simulation.
+
+They should not HIDE the simulation.
+
+============================================================
+6. TERRAIN MATERIAL QUALITY
+============================================================
+
+Replace the current flat gray appearance.
+
+Use appropriate material zones:
+
+- Grass
+- Rock
+- Soil
+- Forest ground
+- Riverbank
+- Sand
+- Wet ground
+- Agricultural land
+- Urban ground
+
+Add multi-scale terrain variation.
+
+Include:
+
+- Natural slopes
+- Erosion
+- Valleys
+- Ridges
+- Riverbanks
+- Subtle elevation variation
+
+Do not over-displace the terrain.
+
+The terrain must remain readable from all existing camera views.
+
+============================================================
+7. RESERVOIR
+============================================================
+
+The reservoir must be MUCH larger than the current one.
+
+It should clearly communicate:
+
+"THIS IS A LARGE BODY OF STORED WATER."
+
+It must:
+
+- Occupy a meaningful area
+- Follow the basin
+- Have a natural shoreline
+- Connect directly to the dam
+- Have believable depth
+- Have subtle water movement
+- Reflect the environment where practical
+
+DO NOT create a tiny rectangular blue lake.
+
+============================================================
+8. DAM DESIGN
+============================================================
+
+The dam must become a major engineering landmark.
+
+Create a believable concrete dam containing, where appropriate:
+
+- Dam wall
+- Dam crest
+- Spillway
+- Intake structures
+- Powerhouse
+- Service road
+- Maintenance structures
+- Control buildings
+- Utility infrastructure
+- Warning signage
+- Structural divisions
+
+The dam must have realistic scale relative to:
+
+- Cars
+- Buildings
+- Trees
+- Roads
+- Infrastructure
+
+The dam must be immediately recognizable from the main overview.
+
+Do not make it tiny.
+
+Do not make it absurdly enormous.
+
+============================================================
+9. DOWNSTREAM CITY
+============================================================
+
+This is one of the MOST IMPORTANT changes.
+
+The current city is far too small.
+
+Create a substantially larger populated region downstream.
+
+The city should have multiple zones:
+
+1. Residential
+2. Commercial
+3. Industrial
+4. Agricultural
+5. Public infrastructure
+6. Riverfront
+7. Transportation
+8. Rural outskirts
+
+Include varied:
+
+- Houses
+- Apartments
+- Shops
+- Warehouses
+- Factories
+- Schools
+- Hospitals
+- Government buildings
+- Utility buildings
+- Water facilities
+- Electrical substations
+- Industrial structures
+- Parking areas
+- Service buildings
+
+Buildings must vary in:
+
+- Height
+- Size
+- Shape
+- Orientation
+- Roof design
+- Density
+
+Do not copy one house hundreds of times without variation.
+
+Use procedural instancing where appropriate.
+
+============================================================
+10. ROAD NETWORK
+============================================================
+
+Create a believable transportation network.
+
+Include:
+
+- Main highway
+- Secondary roads
+- Residential streets
+- Dam access road
+- Service roads
+- Intersections
+- Bridges
+
+The network should connect:
+
+DAM
+→ VALLEY
+→ TOWN
+→ DOWNSTREAM AREAS
+
+Roads must conform to terrain.
+
+Do not place roads randomly over mountains.
+
+============================================================
+11. RIVER
+============================================================
+
+Create a clearly visible downstream river.
+
+The river must have:
+
+- Main channel
+- Riverbanks
+- Meanders
+- Floodplain
+- Vegetation
+- Bridges
+- Roads crossing it
+
+The river must visually guide the viewer toward the settlement.
+
+The downstream river should gradually become wider and connect to lower
+terrain.
+
+============================================================
+12. VEGETATION
+============================================================
+
+Make the world feel alive.
+
+Add optimized vegetation:
+
+- Trees
+- Bushes
+- Grass
+- Forest patches
+- Riverbank vegetation
+- Agricultural vegetation
+
+Use instancing.
+
+Use LOD where useful.
+
+Avoid thousands of unique high-poly objects.
+
+Vegetation density:
+
+MOUNTAINS:
+low
+
+FOREST:
+high
+
+RIVERBANK:
+medium/high
+
+CITY:
+low/medium
+
+AGRICULTURE:
+medium
+
+============================================================
+13. AGRICULTURE
+============================================================
+
+Add farmland downstream.
+
+Include:
+
+- Crop fields
+- Irrigation channels
+- Farm roads
+- Small farm buildings
+- Tree lines
+
+This is important because the disaster affects more than buildings.
+
+The simulation should demonstrate potential impact on:
+
+- Agriculture
+- Roads
+- Bridges
+- Homes
+- Industrial areas
+- Public infrastructure
+
+============================================================
+14. IMPORTANT LANDMARKS
+============================================================
+
+Add recognizable infrastructure:
+
+- Major bridge
+- Hospital
+- School
+- Industrial facility
+- Power substation
+- Water treatment facility
+- Highway
+- Dense residential area
+- Agricultural zone
+- Factory
+- Emergency facility
+
+These should become meaningful flood-impact targets.
+
+============================================================
+15. SCALE REFERENCES
+============================================================
+
+Add small scale references:
+
+- Cars
+- Trucks
+- Street lights
+- Utility poles
+- Trees
+- Optional people silhouettes
+
+This makes the world feel physically believable.
+
+============================================================
+16. CAMERA COMPOSITION
+============================================================
+
+DO NOT MODIFY THE EXISTING CAMERA SYSTEM.
+
+Instead redesign the world around it.
+
+The overview camera must clearly communicate:
+
+RESERVOIR
+↓
+DAM
+↓
+RIVER
+↓
+CITY
+↓
+FLOODPLAIN
+
+Do not let huge foreground mountains occupy most of the frame.
+
+The important simulation content must dominate the composition.
+
+The world should have visual depth:
+
+FOREGROUND
+→ CITY / INFRASTRUCTURE
+→ RIVER
+→ DAM
+→ RESERVOIR
+→ MOUNTAINS
+
+============================================================
+17. PROFESSIONAL VISUAL STYLE
+============================================================
+
+The target aesthetic is:
+
+GIS
++
+DIGITAL TWIN
++
+MODERN SIMULATION SOFTWARE
++
+HIGH-QUALITY GAME ENVIRONMENT
+
+NOT:
+
+- Generic Three.js demo
+- Generic AI terrain
+- Low-poly mountain demo
+- Cartoon disaster game
+
+Use:
+
+- Clean daylight
+- Soft shadows
+- Atmospheric depth
+- Natural materials
+- Readable buildings
+- Clear roads
+- High-visibility water
+
+Avoid excessive:
+
+- Bloom
+- Motion blur
+- Camera shake
+- Chromatic aberration
+- Cinematic color grading
+- Screen effects
+
+This is an engineering visualization.
+
+============================================================
+18. FLOOD SIMULATION VISUALIZATION
+============================================================
+
+The existing hydrodynamic simulation remains authoritative.
+
+DO NOT replace it.
+
+If the existing system exposes:
+
+- Water depth
+- Water surface elevation
+- Flow velocity
+- Flow direction
+- Flood extent
+- Inundation grid
+- Simulation timestep
+
+use those values.
+
+Map them correctly to the 3D world.
+
+The 3D layer should visualize the actual simulation.
+
+Never fake engineering results merely to make the animation look better.
+
+============================================================
+19. FLOOD WATER
+============================================================
+
+Water must NOT simply appear as a giant blue plane.
+
+Floodwater should:
+
+- Follow terrain
+- Follow river channels
+- Spread into low areas
+- Expand into the floodplain
+- Respect simulation boundaries
+- Show changing depth
+- Show changing extent
+
+Near the dam:
+
+HIGH ENERGY
+
+Downstream river:
+
+STRONG FLOW
+
+Floodplain:
+
+WIDER / SHALLOWER FLOW
+
+============================================================
+20. FLOOD WATER MATERIAL
+============================================================
+
+Improve water rendering.
+
+Use where performance allows:
+
+- Transparency
+- Reflection
+- Subtle distortion
+- Flow texture
+- Foam
+- Turbulence
+- Directional movement
+
+Reservoir water should appear relatively calm.
+
+Breach water should appear highly energetic.
+
+Floodplain water should appear shallower.
+
+Do not use the exact same visual treatment for every water body.
+
+============================================================
+21. FLOW DIRECTION
+============================================================
+
+Make flow direction visually understandable.
+
+Use one or more of:
+
+- Animated flow texture
+- Flow lines
+- Directional particles
+- Subtle arrows
+- Surface motion
+- Foam streaks
+
+The viewer should intuitively understand:
+
+"Water is moving from the dam toward the populated region."
+
+============================================================
+22. REALISTIC DAM-BREAK EXPERIENCE
+============================================================
+
+The dam break must become a polished multi-stage event.
+
+DO NOT use:
+
+DAM DISAPPEARS
+→
+BLUE WATER BLOB
+
+Instead create a progressive failure sequence.
+
+============================================================
+23. DAM BREAK STAGES
+============================================================
+
+STAGE 0 — INTACT
+
+- Dam intact
+- Reservoir calm
+- Normal river
+- Normal environment
+
+STAGE 1 — HYDRAULIC STRESS
+
+- Increased water movement near dam
+- Increased turbulence
+- Stronger spillway activity if applicable
+- Subtle structural stress visualization
+
+STAGE 2 — BREACH INITIATION
+
+- Clearly defined breach point
+- Localized structural failure
+- Water begins escaping
+- Flow velocity increases
+
+STAGE 3 — BREACH EXPANSION
+
+- Opening progressively expands
+- Discharge increases
+- Turbulence increases
+- Whitewater increases
+- Small structural fragments may appear
+
+STAGE 4 — HIGH-ENERGY RELEASE
+
+- Strong water jet
+- Whitewater
+- Spray
+- Foam
+- Turbulence
+
+STAGE 5 — DOWNSTREAM PROPAGATION
+
+Water enters the river valley.
+
+Flow follows terrain.
+
+STAGE 6 — FLOODPLAIN INUNDATION
+
+Water leaves the channel and enters low terrain.
+
+STAGE 7 — URBAN INUNDATION
+
+Water reaches:
+
+- Roads
+- Houses
+- Bridges
+- Industrial areas
+- Agriculture
+- Infrastructure
+
+============================================================
+24. HYDRAULIC REALISM
+============================================================
+
+A dam break is NOT an explosion.
+
+Do not create:
+
+- Fireballs
+- Giant explosions
+- Hollywood destruction
+- Massive unrealistic tsunami waves
+
+Instead emphasize:
+
+- Pressure
+- Breach
+- Discharge
+- Turbulence
+- Flow acceleration
+- Flood propagation
+
+The visual effect can be dramatic without becoming physically absurd.
+
+============================================================
+25. BREACH STRUCTURE
+============================================================
+
+Do not make the breach look like a random hole.
+
+The structure should visually progress:
+
+INTACT CONCRETE
+→
+LOCALIZED FAILURE
+→
+OPENING
+→
+EXPANDING BREACH
+→
+REMAINING STRUCTURE
+
+The remaining dam structure should remain visible.
+
+============================================================
+26. DEBRIS
+============================================================
+
+If performance allows, add limited debris:
+
+- Concrete fragments
+- Logs
+- Natural debris
+- Small structural pieces
+
+Use instancing.
+
+Keep debris sparse.
+
+Do not implement expensive destruction physics unless already available.
+
+============================================================
+27. SPILL VS DAM BREAK
+============================================================
+
+These must look visually different.
+
+SPILL:
+
+Controlled engineered release.
+
+Visual:
+
+- Spillway discharge
+- Whitewater
+- Controlled flow
+- Increased river flow
+
+DAM BREAK:
+
+Uncontrolled structural failure.
+
+Visual:
+
+- Breach
+- Rapid discharge
+- High-energy flow
+- Turbulence
+- Flood propagation
+
+This distinction is extremely important.
+
+============================================================
+28. RAIN AND STORM
+============================================================
+
+Existing RAIN and STORM states must remain intact.
+
+Improve only their visual presentation where necessary.
+
+RAIN:
+
+- Rain particles
+- Wet surfaces
+- Rain-disturbed water
+
+STORM:
+
+- Heavier precipitation
+- Stronger surface disturbance
+- More intense environmental conditions
+
+Keep particle systems efficient.
+
+============================================================
+29. ENVIRONMENT RESPONSE
+============================================================
+
+The environment should visibly respond to flooding.
+
+NORMAL:
+
+- Dry roads
+- Green fields
+- Normal river
+- Calm reservoir
+
+FLOOD:
+
+- Wet terrain
+- Rising water
+- Flooded roads
+- Flooded fields
+- Water around buildings
+- Wider river
+- Inundated infrastructure
+
+This should make the simulation feel like a connected digital twin.
+
+============================================================
+30. INFRASTRUCTURE STATUS
+============================================================
+
+Where simulation data permits, infrastructure can transition:
+
+SAFE
+→
+AT RISK
+→
+INUNDATED
+
+Examples:
+
+Road:
+NORMAL → FLOODED
+
+Bridge:
+NORMAL → INUNDATED
+
+Residential area:
+NORMAL → SURROUNDED BY WATER
+
+Farm:
+NORMAL → FLOODED
+
+Industrial zone:
+NORMAL → INUNDATED
+
+Do NOT automatically destroy everything.
+
+This is a flood-risk simulation, not a destruction game.
+
+============================================================
+31. FLOOD DEPTH
+============================================================
+
+If flood depth is available, visualize it.
+
+Use existing engineering values.
+
+Possible visualization:
+
+shallow
+→
+moderate
+→
+deep
+→
+severe
+
+Do not hardcode arbitrary engineering classifications if the existing
+project already defines them.
+
+============================================================
+32. SIMULATION PLAYBACK SPEED
+============================================================
+
+Implement a proper simulation playback-speed system.
+
+Minimum supported speeds:
+
+0.25×
+0.5×
+1×
+2×
+4×
+8×
+
+If the existing application already has speed controls:
+
+KEEP THEM.
+
+Do not create duplicate controls.
+
+============================================================
+33. SPEED MUST CONTROL SIMULATION TIME
+============================================================
+
+This is CRITICAL.
+
+When the user selects:
+
+1×
+→ normal simulation progression
+
+2×
+→ actual simulation time advances 2× faster
+
+4×
+→ actual simulation time advances 4× faster
+
+8×
+→ actual simulation time advances 8× faster
+
+DO NOT simply make the water animation visually faster.
+
+The following must remain synchronized:
+
+- Simulation time
+- Flood depth
+- Water surface
+- Flood extent
+- Flow velocity
+- Dam breach
+- Infrastructure status
+- Flood boundary
+- Simulation statistics
+- Existing sensor/state data
+
+============================================================
+34. SIMULATION CLOCK ARCHITECTURE
+============================================================
+
+Separate:
+
+REAL TIME
+
+from:
+
+SIMULATION TIME
+
+Conceptually:
+
+realTimeDelta
+↓
+playbackSpeed
+↓
+simulationTimeAccumulator
+↓
+simulation timestep updates
+↓
+visual interpolation
+↓
+rendering
+
+Preserve the existing fixed timestep / numerical simulation behavior.
+
+Do not change the actual hydrodynamic mathematics simply to achieve
+higher playback speed.
+
+============================================================
+35. SMOOTH HIGH-SPEED PLAYBACK
+============================================================
+
+At:
+
+2×
+4×
+8×
+
+the simulation must feel faster, not broken.
+
+Avoid:
+
+- Huge jumps
+- Water teleportation
+- Frame skipping
+- Sudden flood boundary jumps
+
+Use interpolation between simulation states when appropriate.
+
+============================================================
+36. PERFORMANCE AT HIGH SPEED
+============================================================
+
+At 4× and 8×:
+
+Do not freeze the UI.
+
+Do not create uncontrolled simulation loops.
+
+Use controlled timestep processing.
+
+If necessary, process simulation steps efficiently while interpolating
+visual output.
+
+The application must remain responsive.
+
+============================================================
+37. SIMULATION TIME DISPLAY
+============================================================
+
+If an existing simulation clock exists, make it authoritative.
+
+Example:
+
+SIMULATION TIME
+00:00:00
+
+At 2×:
+
+00:00:00
+00:00:02
+00:00:04
+00:00:06
+
+The exact values depend on the simulation timestep.
+
+Never display fake accelerated time.
+
+============================================================
+38. PAUSE / RESUME
+============================================================
+
+When paused:
+
+Simulation time must stop.
+
+Water must stop progressing.
+
+Resume must continue from the exact same state.
+
+Changing speed while paused must not advance the simulation.
+
+============================================================
+39. LIVE SPEED CHANGE
+============================================================
+
+Allow:
+
+1× → 2× → 4× → 1×
+
+while running.
+
+Changing speed must NEVER:
+
+- Reset simulation
+- Reset dam
+- Reset flood
+- Reset time
+- Reset sensors
+- Reset camera
+- Reset ESP32 state
+
+============================================================
+40. RESET
+============================================================
+
+Reset must restore the correct initial simulation state.
+
+Reset:
+
+- Simulation time
+- Reservoir
+- River
+- Flood extent
+- Water
+- Breach
+- Infrastructure status
+- Particles
+- Debris
+- Environmental effects
+
+No residual floodwater should remain.
+
+============================================================
+41. EVENT TRANSITIONS
+============================================================
+
+Existing states remain authoritative.
+
+For example:
+
+NORMAL
+→
+RAIN
+→
+STORM
+→
+SPILL
+→
+DAM BREAK
+
+The 3D environment should respond appropriately.
+
+Do not rewrite the state machine.
+
+============================================================
+42. FLOOD TIMELINE EXPERIENCE
+============================================================
+
+Where actual simulation data supports it, make the event visually
+understandable as a timeline.
+
+Example:
+
+T+0
+DAM INTACT
+
+T+1
+BREACH INITIATED
+
+T+2
+HIGH-ENERGY RELEASE
+
+T+5
+FLOOD WAVE DOWNSTREAM
+
+T+10
+FIRST INFRASTRUCTURE AFFECTED
+
+T+15
+URBAN INUNDATION
+
+The exact times must come from the actual simulation.
+
+DO NOT invent engineering results.
+
+============================================================
+43. DEMONSTRATION MODE
+============================================================
+
+If a demonstration/presentation mode already exists, improve its visual
+experience without changing the underlying simulation.
+
+The judge should be able to observe:
+
+1. Reservoir
+2. Dam
+3. Populated downstream valley
+4. Dam-break activation
+5. Breach
+6. Water release
+7. Flood propagation
+8. Floodplain expansion
+9. Infrastructure inundation
+10. Large affected area
+
+The entire event should be understandable without extensive explanation.
+
+============================================================
+44. ENGINEERING MODE
+============================================================
+
+If the application architecture permits a visualization mode without
+breaking existing UI:
+
+ENGINEERING MODE should emphasize:
+
+- Terrain
+- Elevation
+- River
+- Flood depth
+- Flood extent
+- Flow direction
+- Infrastructure
+- Simulation time
+- Numerical information
+
+Keep this clean and restrained.
+
+============================================================
+45. DEMONSTRATION MODE
+============================================================
+
+If a presentation mode exists or can be added without disrupting the
+current UI:
+
+DEMONSTRATION MODE should emphasize:
+
+DAM BREAK
+↓
+BREACH
+↓
+DISCHARGE
+↓
+FLOOD WAVE
+↓
+CITY
+↓
+INUNDATION
+
+Use stronger visual feedback but preserve scientific correctness.
+
+============================================================
+46. VISUAL HIERARCHY
+============================================================
+
+The visual priority should approximately be:
+
+1. Dam
+2. Reservoir
+3. River / flood
+4. Downstream settlement
+5. Infrastructure
+6. Floodplain
+7. Terrain
+8. Background mountains
+
+The mountains should NEVER dominate the scene to the point where the
+dam and city become insignificant.
+
+============================================================
+47. OPEN-WORLD DESIGN PRINCIPLE
+============================================================
+
+Think like a game environment artist.
+
+Every major region should have purpose.
+
+The world should contain:
+
+MOUNTAINS
+↓
+RESERVOIR
+↓
+DAM
+↓
+RIVER
+↓
+FOREST
+↓
+FARMLAND
+↓
+VILLAGE
+↓
+TOWN
+↓
+INDUSTRIAL AREA
+↓
+HIGHWAY
+↓
+BRIDGE
+↓
+FLOODPLAIN
+↓
+DOWNSTREAM REGION
+
+Do not fill empty space with random geometry.
+
+Create meaningful geographic zones.
+
+============================================================
+48. GIS CONSISTENCY
+============================================================
+
+If the current simulation uses:
+
+- Latitude/longitude
+- Projected coordinates
+- Grid coordinates
+- Heightmaps
+- Elevation data
+- Simulation cells
+
+preserve the mapping.
+
+The visual world must correspond to the actual simulation domain.
+
+DO NOT create beautiful geometry that is disconnected from the actual
+simulation coordinate system.
+
+============================================================
+49. PERFORMANCE
+============================================================
+
+This application must run on a normal laptop.
+
+Optimize aggressively.
+
+Use:
+
+- Instanced buildings
+- Instanced vegetation
+- LOD
+- Efficient terrain meshes
+- Texture reuse
+- Lightweight shaders
+- Efficient water rendering
+- GPU-friendly particles
+
+Avoid:
+
+- Thousands of unique draw calls
+- Huge textures
+- Heavy physics
+- Expensive rigid-body destruction
+- Excessive post-processing
+- Unnecessary external dependencies
+- Extremely high-poly assets
+
+The environment should feel detailed without destroying frame rate.
+
+============================================================
+50. PROCEDURAL GENERATION
+============================================================
+
+If the current environment is procedurally generated, improve the
+generation architecture.
+
+Use deterministic seeded generation.
+
+Suggested pipeline:
+
+Terrain
+↓
+Elevation
+↓
+River
+↓
+Reservoir
+↓
+Dam
+↓
+Floodplain
+↓
+Roads
+↓
+City blocks
+↓
+Buildings
+↓
+Infrastructure
+↓
+Vegetation
+↓
+Flood visualization
+
+The same seed must produce the same environment.
+
+Do not randomly change the world on every reload.
+
+============================================================
+51. MODULAR ARCHITECTURE
+============================================================
+
+If appropriate for the existing project architecture, organize the
+environment into logical systems:
+
+TerrainSystem
+ReservoirSystem
+DamEnvironment
+RiverSystem
+FloodplainSystem
+CityGenerator
+RoadSystem
+InfrastructureSystem
+VegetationSystem
+WaterVisualization
+FloodVisualization
+DamBreakVisualization
+SimulationPlayback
+EnvironmentLighting
+
+Do not introduce unnecessary abstraction.
+
+Reuse the existing architecture where practical.
+
+============================================================
+52. DO NOT OVERENGINEER
+============================================================
+
+Do not rewrite the entire project.
+
+Do not migrate frameworks.
+
+Do not replace the current rendering engine unless absolutely necessary.
+
+Do not introduce unnecessary packages.
+
+Do not rewrite working backend logic.
+
+Do not modify hardware communication.
+
+Do not modify ESP32 protocols.
+
+Do not modify camera architecture.
+
+Focus on the actual problem:
+
+THE 3D ENVIRONMENT AND ITS SIMULATION VISUALIZATION.
+
+============================================================
+53. BEFORE MODIFYING CODE
+============================================================
+
+First inspect the project.
+
+Determine:
+
+- What rendering engine is used?
+- Where is terrain generated?
+- Where is water generated?
+- Where is the dam generated?
+- Where are buildings generated?
+- How does simulation time work?
+- How are flood values exposed?
+- How are states represented?
+- How are camera views implemented?
+- How does ESP32 data enter the application?
+
+Then identify the smallest set of files required for the redesign.
+
+Do not blindly modify unrelated files.
+
+============================================================
+54. IMPLEMENTATION ORDER
+============================================================
+
+PHASE 1:
+Understand existing architecture.
+
+PHASE 2:
+Redesign terrain and valley.
+
+PHASE 3:
+Build large reservoir.
+
+PHASE 4:
+Build recognizable dam.
+
+PHASE 5:
+Build downstream river.
+
+PHASE 6:
+Build floodplain.
+
+PHASE 7:
+Build large populated settlement.
+
+PHASE 8:
+Build roads and bridges.
+
+PHASE 9:
+Add agriculture and forests.
+
+PHASE 10:
+Add infrastructure landmarks.
+
+PHASE 11:
+Connect existing simulation data.
+
+PHASE 12:
+Upgrade flood visualization.
+
+PHASE 13:
+Upgrade dam-break visualization.
+
+PHASE 14:
+Implement proper playback speed.
+
+PHASE 15:
+Optimize.
+
+PHASE 16:
+Test every existing state.
+
+============================================================
+55. FINAL VISUAL TEST
+============================================================
+
+Before declaring success, look at the default overview.
+
+Without reading any labels, the viewer should understand:
+
+"There is a large reservoir behind a dam."
+
+"There is a river downstream."
+
+"There is a populated valley."
+
+"There is significant infrastructure downstream."
+
+"If the dam fails, water will travel toward the populated region."
+
+When DAM BREAK is activated, the viewer should immediately see:
+
+DAM
+↓
+BREACH
+↓
+WATER RELEASE
+↓
+RIVER
+↓
+FLOODPLAIN
+↓
+CITY
+↓
+INFRASTRUCTURE
+↓
+INUNDATION
+
+============================================================
+56. FINAL PERFORMANCE TEST
+============================================================
+
+Verify:
+
+[ ] Normal state works
+[ ] Rain works
+[ ] Storm works
+[ ] Spill works
+[ ] Dam Break works
+[ ] Testing states work
+[ ] ESP32 integration works
+[ ] Existing camera views work
+[ ] Existing camera switching works
+
+[ ] 0.25× works
+[ ] 0.5× works
+[ ] 1× works
+[ ] 2× works
+[ ] 4× works
+[ ] 8× works
+
+[ ] Speed change does not reset simulation
+[ ] Pause works
+[ ] Resume works
+[ ] Reset works
+[ ] Simulation clock remains accurate
+[ ] Flood depth remains synchronized
+[ ] Flood extent remains synchronized
+[ ] Water remains synchronized
+[ ] Dam breach remains synchronized
+[ ] Infrastructure status remains synchronized
+
+[ ] Reservoir is large
+[ ] Dam is clearly visible
+[ ] River is clear
+[ ] City is substantially larger
+[ ] Roads exist
+[ ] Bridges exist
+[ ] Infrastructure exists
+[ ] Agriculture exists
+[ ] Forest exists
+[ ] Floodplain exists
+
+[ ] Flood follows terrain
+[ ] Flood reaches downstream areas correctly
+[ ] Flood visualization is readable
+[ ] Dam break looks progressive
+[ ] Spill and dam break look different
+[ ] High-speed playback remains smooth
+[ ] No major performance degradation
+[ ] No broken existing features
+
+============================================================
+57. WHAT YOU MUST NOT DO
+============================================================
+
+DO NOT:
+
+- Keep the current weak terrain composition
+- Simply add a few buildings
+- Generate another random mountain landscape
+- Make the city tiny
+- Make the dam tiny
+- Make the reservoir tiny
+- Cover everything in gray rock
+- Use random noise as the main terrain design
+- Put buildings randomly everywhere
+- Put roads through mountains
+- Put floating buildings
+- Put floating roads
+- Put floating terrain
+- Create fake flood results
+- Replace hydrodynamic calculations
+- Replace the state machine
+- Replace ESP32 integration
+- Replace camera systems
+- Remove simulation states
+- Remove testing states
+- Remove rain
+- Remove storm
+- Remove spill
+- Remove dam break
+- Rewrite the backend unnecessarily
+- Add a completely unrelated framework
+- Create a generic Three.js showcase
+- Create an arcade-game-style disaster
+- Make the dam explode like a bomb
+- Make the flood a giant blue circular blob
+- Use fake engineering numbers
+- Make the scene cinematic at the expense of readability
+
+============================================================
+58. CORE PRODUCT PHILOSOPHY
+============================================================
+
+This project is NOT:
+
+"A 3D model with water animation."
+
+It is:
+
+"An interactive real-time dam-break inundation digital twin."
+
+The simulation data is the authority.
+
+The 3D environment is the storyteller.
+
+The animation exists to make the consequences of the simulation immediately
+understandable.
+
+============================================================
+59. FINAL TARGET
+============================================================
+
+The final product should feel like:
+
+PROFESSIONAL DAM-BREAK DIGITAL TWIN
+
++
+REAL-TIME HYDRODYNAMIC FLOOD VISUALIZATION
+
++
+GIS-STYLE SPATIAL ANALYSIS
+
++
+SMALL OPEN-WORLD GAME ENVIRONMENT
+
++
+DISASTER MANAGEMENT DEMONSTRATION SYSTEM
+
+The visual storytelling must be:
+
+RESERVOIR
+↓
+HYDRAULIC PRESSURE
+↓
+DAM FAILURE
+↓
+BREACH
+↓
+HIGH-ENERGY DISCHARGE
+↓
+RIVER PROPAGATION
+↓
+FLOODPLAIN INUNDATION
+↓
+URBAN IMPACT
+↓
+INFRASTRUCTURE RISK
+
+Every visual element should reinforce this chain.
+
+============================================================
+60. MOST IMPORTANT INSTRUCTION
+============================================================
+
+DO NOT OPTIMIZE FOR "PRETTY TERRAIN."
+
+OPTIMIZE FOR:
+
+DAM
+→
+WATER
+→
+FLOW
+→
+SETTLEMENT
+→
+INFRASTRUCTURE
+→
+INUNDATION
+→
+HUMAN IMPACT
+
+The final scene must communicate the severity of dam failure within
+approximately five seconds of visual observation.
+
+A judge should not need someone standing beside the laptop saying:
+
+"That blue thing is the dam."
+
+"Those tiny boxes are houses."
+
+"The water is supposed to go that way."
+
+The 3D environment itself must communicate the problem.
+
+============================================================
+EXECUTION INSTRUCTION
+============================================================
+
+START BY INSPECTING THE EXISTING PROJECT.
+
+Do not immediately write code.
+
+First identify the current 3D architecture and simulation-to-rendering
+pipeline.
+
+Then make the environment redesign.
+
+After implementation, run the application and test the redesigned scene
+through every existing simulation state.
+
+If you encounter a conflict between visual improvements and an existing
+working system:
+
+PRESERVE THE WORKING SYSTEM.
+
+Modify the visualization layer instead.
+
+Do not declare the task complete after making minor visual changes.
+
+The result must be a SUBSTANTIAL REDESIGN of the existing 3D world.
+
+The current environment should look like a prototype.
+
+The new environment should look like a polished SIH-ready engineering
+product.
+
+
+Proceed with the implementation.
+
+Do not redesign the architecture unnecessarily.
+
+Work incrementally.
+
+First implement the new terrain + reservoir + dam + downstream valley composition and show me the result.
+
+Then implement the city/infrastructure layer.
+
+Then implement the dam-break/flood visual improvements.
+
+Then implement simulation playback speed.
+
+After each major phase, verify that the existing ESP32 integration, simulation states, and camera system still work.
+
+Do not move to the next phase if you have broken an existing feature.============================================================
+MAP PLANNING — DO NOT RANDOMLY GENERATE THE WORLD
+============================================================
+
+Before generating terrain, buildings, vegetation, roads, or water,
+design the 3D environment as a PLANNED DISASTER-SIMULATION MAP.
+
+This is extremely important.
+
+DO NOT generate a random procedural landscape and then randomly place
+a dam and buildings on it.
+
+The entire map must be deliberately designed around the dam-break
+scenario.
+
+Think like a level designer designing a small open-world disaster
+simulation map.
+
+============================================================
+GLOBAL MAP STRUCTURE
+============================================================
+
+Use a large rectangular simulation world.
+
+The DAM and RESERVOIR must be positioned near one corner of the map,
+preferably the upper-left / northwest region.
+
+The dam should face DIAGONALLY toward the center of the map.
+
+Do NOT place the dam in the center.
+
+Do NOT place the dam parallel to the screen.
+
+The dam should create a strong diagonal visual axis:
+
+RESERVOIR
+      ↓
+     DAM
+       ╲
+        ╲
+         ╲
+          RIVER
+            ╲
+             ╲
+           SETTLEMENT
+                ╲
+                 ╲
+               FLOODPLAIN
+                    ╲
+                  DOWNSTREAM
+
+============================================================
+MAP ZONES
+============================================================
+
+Create deliberate geographic zones.
+
+ZONE A — UPPER RESERVOIR
+
+Location:
+Upper-left / northwest corner.
+
+Contains:
+
+- Large reservoir
+- Mountain basin
+- Dam
+- Dam access road
+- Hydroelectric infrastructure
+- Forested slopes
+- Service buildings
+
+This is the highest elevation region.
+
+============================================================
+
+ZONE B — DAM / GORGE
+
+Immediately downstream of the reservoir.
+
+Contains:
+
+- Large concrete dam
+- Spillway
+- Powerhouse
+- Maintenance buildings
+- Service roads
+- River outlet
+- High rocky valley walls
+
+The dam should be clearly visible from the overview camera.
+
+============================================================
+
+ZONE C — DOWNSTREAM VALLEY
+
+Immediately after the dam.
+
+Contains:
+
+- Main river
+- Forest
+- Smaller roads
+- Small village
+- Farmland
+- Riverbank vegetation
+
+This region should be relatively narrow initially.
+
+The river should gradually widen as it moves downstream.
+
+============================================================
+
+ZONE D — FIRST BRIDGE / TRANSPORT CORRIDOR
+
+Further downstream.
+
+Create:
+
+- Major bridge
+- Road intersection
+- Secondary roads
+- Small settlement
+- River crossing
+
+This becomes an important early infrastructure target.
+
+When the flood arrives, the bridge should become visibly surrounded by water.
+
+============================================================
+
+ZONE E — AGRICULTURAL REGION
+
+Place farmland downstream and slightly away from the main city.
+
+Include:
+
+- Multiple fields
+- Farm roads
+- Irrigation channels
+- Small farm buildings
+- Tree lines
+
+The farmland should occupy a meaningful area.
+
+This demonstrates that flooding affects agriculture as well as cities.
+
+============================================================
+
+ZONE F — INDUSTRIAL REGION
+
+Place an industrial area between the agricultural region and the main
+city, preferably close enough to the river that it can become affected.
+
+Include:
+
+- Factories
+- Warehouses
+- Storage buildings
+- Utility structures
+- Power infrastructure
+- Service roads
+- Parking areas
+
+This becomes a major economic-impact zone.
+
+============================================================
+
+ZONE G — MAIN CITY
+
+The main city should occupy a LARGE CENTRAL / LOWER-CENTRAL region.
+
+It must NOT be a tiny cluster.
+
+Use:
+
+- Residential neighborhoods
+- Apartments
+- Shops
+- Schools
+- Hospital
+- Government buildings
+- Commercial buildings
+- Roads
+- Intersections
+- Parking
+- Utility infrastructure
+
+The city should have several density levels.
+
+City center:
+dense
+
+Residential outskirts:
+medium
+
+Outer edge:
+low
+
+============================================================
+
+ZONE H — FLOODPLAIN
+============================================================
+
+Beyond and around the downstream river, create a large low-elevation
+floodplain.
+
+This is extremely important.
+
+The floodplain should be visibly lower than surrounding terrain.
+
+It should contain:
+
+- Farmland
+- Rural houses
+- Roads
+- Small settlements
+- Wetlands
+- Trees
+- Open land
+
+This gives the flood somewhere to spread.
+
+============================================================
+ZONE I — DOWNSTREAM REGION
+============================================================
+
+The river continues beyond the main city.
+
+Create a downstream region containing:
+
+- Smaller settlements
+- Agriculture
+- Roads
+- Low terrain
+- River branches
+- Flood-prone areas
+
+The simulation world should not simply end immediately after the city.
+
+============================================================
+ELEVATION PLAN
+============================================================
+
+The elevation hierarchy must be:
+
+HIGHEST
+Mountain / reservoir
+        ↓
+Dam
+        ↓
+Upper valley
+        ↓
+River valley
+        ↓
+Agriculture
+        ↓
+City
+        ↓
+Floodplain
+        ↓
+Downstream
+
+The terrain must guide water naturally downstream.
+
+DO NOT create elevation barriers that cause the flood to behave incorrectly.
+
+============================================================
+DAM ORIENTATION
+============================================================
+
+The dam must be diagonally oriented.
+
+It should visually face toward the center of the world.
+
+Conceptually:
+
+        RESERVOIR
+     ~~~~~~~~~~~~~~~
+   ~~~~~~~~~~~~~~~~~~
+          ╲
+           ╲
+            ███████
+            █ DAM █
+            ███████
+                 ╲
+                  ╲
+                   ╲
+                    CITY
+                 [CENTER]
+
+The dam should NOT face directly toward the camera.
+
+The diagonal orientation is intentional.
+
+It creates a stronger visual relationship between:
+
+DAM → CITY
+
+============================================================
+RIVER PATH
+============================================================
+
+The river must begin at the dam and travel toward the populated region.
+
+The river should:
+
+1. Start narrow immediately after the dam.
+2. Pass through the downstream valley.
+3. Pass near the village.
+4. Cross the major bridge.
+5. Pass the industrial area.
+6. Continue alongside/through the city.
+7. Expand into the floodplain.
+8. Continue downstream.
+
+The river must be geographically believable.
+
+============================================================
+CITY POSITIONING
+============================================================
+
+Do not put the city directly against the dam.
+
+There should be enough distance for the flood wave to propagate.
+
+The city should be far enough downstream that the simulation demonstrates:
+
+DAM BREAK
+→
+FLOW ACCELERATION
+→
+RIVER PROPAGATION
+→
+FLOODPLAIN INUNDATION
+→
+URBAN INUNDATION
+
+This creates a meaningful disaster sequence.
+
+============================================================
+FLOOD IMPACT ZONING
+============================================================
+
+Design the map so different areas become affected at different times.
+
+Near dam:
+
+EARLY / HIGH-ENERGY IMPACT
+
+Middle valley:
+
+RIVER OVERFLOW
+
+Industrial area:
+
+INFRASTRUCTURE IMPACT
+
+City:
+
+URBAN INUNDATION
+
+Floodplain:
+
+LARGE-AREA FLOODING
+
+Downstream:
+
+PROPAGATING FLOOD
+
+Do not make the entire map flood simultaneously.
+
+============================================================
+DISASTER STORYTELLING
+============================================================
+
+The map itself must tell a story.
+
+NORMAL:
+
+Reservoir
+→ Dam
+→ River
+→ Village
+→ Farmland
+→ Industry
+→ City
+→ Downstream
+
+DAM BREAK:
+
+Dam
+→ Breach
+→ High-energy water
+→ River surge
+→ Bridge affected
+→ Farmland inundated
+→ Industrial area affected
+→ City roads flooded
+→ Buildings surrounded
+→ Floodplain expands
+→ Downstream affected
+
+This progression is the core of the level design.
+
+============================================================
+OBJECT PLACEMENT RULE
+============================================================
+
+Every major object should have a geographic purpose.
+
+Do not randomly scatter:
+
+- Buildings
+- Trees
+- Roads
+- Bridges
+- Factories
+- Houses
+
+Instead use logical clusters.
+
+For example:
+
+CITY BLOCK
+→ roads
+→ buildings
+→ parking
+→ utilities
+
+INDUSTRIAL BLOCK
+→ factory
+→ warehouse
+→ service road
+→ power infrastructure
+
+RURAL AREA
+→ farm
+→ farmhouse
+→ fields
+→ access road
+
+RIVER AREA
+→ river
+→ vegetation
+→ bridge
+→ roads
+
+============================================================
+VISUAL COMPOSITION
+============================================================
+
+From the overview camera:
+
+The dam should be visible in one corner.
+
+The river should create a diagonal leading line.
+
+The city should occupy a large portion of the center/lower center.
+
+The floodplain should occupy a large downstream area.
+
+Mountains should form the background/frame.
+
+Do NOT let mountains fill 70–80% of the screen.
+
+The civilization and river system must remain visible.
+
+============================================================
+OPEN-WORLD DENSITY
+============================================================
+
+The map should feel like a small open-world game environment.
+
+Not an empty simulation grid.
+
+There should be enough:
+
+- Houses
+- Buildings
+- Roads
+- Trees
+- Fields
+- Bridges
+- Infrastructure
+- Terrain variation
+
+to create a believable world.
+
+However, optimize all repeated objects using instancing and LOD.
+
+============================================================
+FLOOD DESIGN REQUIREMENT
+============================================================
+
+The map must be intentionally designed so the flood can visually affect
+different types of targets.
+
+Create:
+
+HIGH-RISK AREAS
+- Riverbank
+- Bridge
+- Low roads
+- Farmland
+
+MEDIUM-RISK AREAS
+- Industrial area
+- Residential outskirts
+
+LARGE-IMPACT AREAS
+- Main city
+- Floodplain
+
+The exact flood extent must still come from the simulation.
+
+The map is designed to make those relationships visible.
+
+============================================================
+FINAL MAP REQUIREMENT
+============================================================
+
+Before generating the actual 3D assets, establish a logical world layout:
+
+        [ RESERVOIR ]
+             |
+          [ DAM ]
+             ╲
+              ╲
+           [ VALLEY ]
+                ╲
+             [ VILLAGE ]
+                  ╲
+                 [BRIDGE]
+                    ╲
+              [FARMLAND]
+                    ╲
+              [INDUSTRIAL]
+                    ╲
+                [ CITY ]
+              /    |    \
+         [HOSPITAL] [SCHOOL]
+                    |
+               [FLOODPLAIN]
+                    |
+               [DOWNSTREAM]
+
+This is the required spatial relationship.
+
+Do not randomly rearrange these major regions.
+
+============================================================
+MOST IMPORTANT MAP RULE
+============================================================
+
+The DAM is the SOURCE.
+
+The RIVER is the PATH.
+
+The CITY is the VULNERABLE TARGET.
+
+The FLOODPLAIN is the EXPANSION AREA.
+
+The INFRASTRUCTURE is the IMPACT TARGET.
+
+The TERRAIN determines the FLOW.
+
+Design the entire 3D world around these relationships.
+
+Do not design the world first and then try to fit the simulation into it.

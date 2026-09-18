@@ -762,3 +762,20 @@ Work Log:
 Stage Summary:
 - Full current build (HEAD 0fb9d80 incl. 3D world redesign) now live at github.com/jisjohnsajan/dam
 - Credentials persisted in ~/.git-credentials for future pushes
+
+---
+Task ID: reference-map-redesign
+Agent: Super Z (main)
+Task: Redesign 3D map to match user's satellite-diorama reference image
+
+Work Log:
+- Read full 2430-line master spec + reference image; surveyed terrain.ts/world.ts/engine.ts/props.ts
+- terrain.ts: vivid grass greens, richer scrub/forest, warm tan high rock, brighter sand, NE farm zone rect (90..150, -57..-46)
+- world.ts: FIXED riverside drive channel crossing (was submerged dzo=0.8 at x=124, re-routed at axisAt+12.5 ending into first avenue); added north-bench village district (60..92,-66..-54); north-slope forest patch (52..114,-73..-64) with nearHouse collision filter; 4 NE patchwork farm plots; industrial estate (3 gable-roof warehouses + containers + aprons at 118/129/140); denser rim trees (2.3 spacing, 0.58 skip); far ring lush green (mu 0.45->0.14, ringH 12+14+3.5); light-gray streets (0x8d8a82); bridge south approach extended
+- FIXED page.tsx corruption (3 broken useState decls: hydro/mode/hd) caused by sandbox file-sync flipper; byte-verified via od
+- ui.tsx + page.tsx: MapLegend collapsible panel (reference-style key + flow direction) bottom-right
+- Browser-verified: overview/top/town/valley cams, dam break 8x (13,296 m3/s outflow, breach 95%, city inundation), Reset clean, legend expand; zero page errors; tsc + eslint clean
+
+Stage Summary:
+- World now matches reference: green forested mountain ring, diagonal river->floodplain, village+forest upstream, industrial estate, patchwork farmland, legend overlay
+- All solver systems untouched; verification screenshots in scripts/verify3_*.png
